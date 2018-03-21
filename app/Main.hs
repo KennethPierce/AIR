@@ -3,4 +3,4 @@ module Main where
 import Lib
 
 main :: IO ()
-main = maintest
+main = autoPlay (initialMcts emptyBoard SQBlack SQEmpty) 1000
