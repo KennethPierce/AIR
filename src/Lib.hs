@@ -7,7 +7,7 @@ import System.Random
 boardSize :: Int
 boardSize = 7
 winLength :: Int
-winLength = 4
+winLength = 5
 
 data Square 
     = SQEmpty 
@@ -111,9 +111,10 @@ initialMcts b player won = MkMcts b player vmoves 0 0 won [initialMcts b' nextPl
         vmoves = (getValidMoves b)
         nextPlayer = if player == SQWhite then SQBlack else SQWhite
         boardsLocs = [(b // [((x*boardSize+y),nextPlayer)],(x,y)) | (x,y) <- vmoves]
-        thisWins SQEmpty b l = if isWinner b l then nextPlayer else SQEmpty
-        thisWins sq _ _ = sq
-        boardsWins = [(b1,thisWins won b1 l1) | (b1,l1) <- boardsLocs]
+        thisWins SQEmpty b l (_:[]) = nextPlayer 
+        thisWins SQEmpty b l _  = if  isWinner b l then nextPlayer else SQEmpty
+        thisWins sq _ _ _ = sq
+        boardsWins = [(b1,thisWins won b1 l1 vmoves) | (b1,l1) <- boardsLocs]
 
 --if no moves available then winner is player 
 autoPlayRollout :: Mcts -> [Float] -> Square
@@ -162,13 +163,12 @@ selectTopRandomly mctss totalPlays r = selectIt [] mctss r
             
 
 oneMctsUpdate :: Mcts -> Int -> [Float]-> (Mcts,Square)
-oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 _ _) totalPlays (r:rs) = (mcts {plays = 1,wins = numWins},winner)
+oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _) totalPlays (r:rs) = (mcts {plays = 1,wins = numWins},winner)
     where
         --rollout (playout)
-        gameWon = won mcts
         winner = if gameWon == SQEmpty then autoPlayRollout mcts rs else gameWon
         numWins = if winner == (player mcts) then 1 else 0        
-oneMctsUpdate mcts totalPlays (r:rs) = (ret,winnerSq)
+oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _) totalPlays (r:rs) = (ret,winnerSq)
     where 
         --select/expand
         (leftRev,randTop,right) = selectTopRandomly (children mcts) totalPlays r
@@ -180,6 +180,12 @@ oneMctsUpdate mcts totalPlays (r:rs) = (ret,winnerSq)
         newPlays = (plays mcts) + 1
         --ret = MkMcts (board mcts) (player mcts) (moves mcts) newWins newPlays newChildren
         ret = mcts {wins=newWins, plays=newPlays, children=newChildren}
+oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) totalPlays (r:rs) = (ret,winner)
+    where  
+        newPlays = (plays mcts) + 1
+        newWins = (wins mcts) + if winner == (player mcts) then 1 else 0
+        ret = mcts {wins=newWins, plays=newPlays}
+
             
 
 
