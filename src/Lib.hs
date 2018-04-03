@@ -1,6 +1,7 @@
 module Lib where
 
 import Data.Vector
+import qualified Data.Sequence as S
 import System.Random
 
 boardSize :: Int
@@ -61,7 +62,11 @@ showBoard b = unlines ls
             return [squareToChar (b ! (i*boardSize+j)) | j <- bs]
 
 getValidMoves :: Board -> [Loc]
-getValidMoves b = [(i,j) | i <- [0..(boardSize-1)]
+getValidMoves b = [quotRem idx boardSize | idx <- [0..(boardSize*boardSize-1)],b ! idx == SQEmpty]
+            
+            
+getValidMoves1 :: Board -> [Loc]
+getValidMoves1 b = [(i,j) | i <- [0..(boardSize-1)]
                         ,j <- [0..(boardSize-1)]
                         ,b ! (i*boardSize+j)  == SQEmpty
                         ]
@@ -77,24 +82,14 @@ getMoveProbabilities b s ls= [(p,l) | l <- ls]
             
 
 --selectMoveRandomly [] _ = Left "error: no move selected. rand > 1 or move probs don't add to 1"
-selectMoveRandomly :: [(Float,Loc)] -> Float -> Loc
-selectMoveRandomly ((_,l):[]) _ = l
-selectMoveRandomly ((f,l):mps) rand = 
+selectMoveRandomly :: [(Float,Loc)] -> Float -> Int -> (Loc,Int)
+selectMoveRandomly ((_,l):[]) _ idx = (l,idx)
+selectMoveRandomly ((f,l):mps) rand idx = 
     if rand <= f
-    then l 
-    else selectMoveRandomly mps (rand-f)
+    then (l,idx) 
+    else selectMoveRandomly mps (rand-f) (idx+1)
                                         
 
---if no moves available then winner is player 
-autoPlayRollout :: Board -> Square -> [Float] -> (Square,Board,Loc)
-autoPlayRollout b s (r:rs) = if winVal == SQEmpty then autoPlayRollout b' s' rs else (winVal,b',(x,y))
-    where
-        ls = getValidMoves b
-        s' = if s == SQBlack then SQWhite else SQBlack
-        mps = getMoveProbabilities b s ls
-        (x,y) = selectMoveRandomly mps r
-        b' = b // [(x*boardSize+y,s)] 
-        winVal = if ls == [] || isWinner b' (x,y)  then s else SQEmpty
 
 
 data Mcts = MkMcts 
@@ -119,6 +114,19 @@ initialMcts b player won = MkMcts b player vmoves 0 0 won [initialMcts b' nextPl
         thisWins SQEmpty b l = if isWinner b l then nextPlayer else SQEmpty
         thisWins sq _ _ = sq
         boardsWins = [(b1,thisWins won b1 l1) | (b1,l1) <- boardsLocs]
+
+--if no moves available then winner is player 
+autoPlayRollout :: Mcts -> [Float] -> Square
+autoPlayRollout mcts (r:rs) = if winVal == SQEmpty then autoPlayRollout mcts' rs else winVal
+    where
+        b = board mcts
+        s = player mcts
+        ls = moves mcts
+        mps = getMoveProbabilities b s ls
+        ((x,y),idx) = selectMoveRandomly mps r 0 
+        mcts' = (children mcts) !! idx
+        b' = board mcts'
+        winVal = if ls == []  then s else won mcts
 
 ucb1 :: Mcts -> Int -> Float
 ucb1 mcts totalPlays = if (plays mcts) == 0 then inf else mean + explore
@@ -153,8 +161,6 @@ selectTopRandomly mctss totalPlays r = selectIt [] mctss r
 
             
 
-            
-        
 oneMctsUpdate :: Mcts -> Int -> [Float]-> (Mcts,Square)
 oneMctsUpdate mcts totalPlays (r:rs) =
     --select
@@ -177,7 +183,7 @@ oneMctsUpdate mcts totalPlays (r:rs) =
         --rollout (playout)
         let 
             gameWon = won mcts
-            (winner,_,_) = if gameWon == SQEmpty then autoPlayRollout (board mcts) (player mcts) rs else (gameWon,board mcts,(0,0))
+            winner = if gameWon == SQEmpty then autoPlayRollout mcts rs else gameWon
             numWins = if winner == (player mcts) then 1 else 0
         in 
             (mcts {plays = 1,wins = numWins},winner)
@@ -191,8 +197,9 @@ mctsUpdates mcts cnt = do
     let (mcts',_) = oneMctsUpdate mcts totPlays rs
     if cnt <= 0 then pure mcts else mctsUpdates mcts' (cnt-1)
 
+--reusing stats from previous plays
 selectTopMoveDet :: Mcts -> Mcts
-selectTopMoveDet mcts = initialMcts b p w
+selectTopMoveDet mcts = mcts'
     where 
           p = if (player mcts) == SQBlack then SQWhite else SQBlack
           mostPlays = Prelude.maximum [plays m | m <- children mcts]
@@ -200,15 +207,17 @@ selectTopMoveDet mcts = initialMcts b p w
           b = board mcts'
           w = won mcts'
 
-autoPlay :: Mcts -> Int -> IO ()
-autoPlay mcts cnt = do    
+selfPlay :: Mcts -> Int -> IO ()
+selfPlay mcts cnt = do    
     putStrLn  (showBoard (board mcts))
     mctsUpdate <- mctsUpdates mcts cnt
     let mcts' = selectTopMoveDet mctsUpdate
     if won mcts /= SQEmpty
     then putStrLn (show (won mcts))
-    else autoPlay mcts' cnt
+    else selfPlay mcts' cnt
 
+mctsInitBoard :: Mcts
+mctsInitBoard = initialMcts emptyBoard SQBlack SQEmpty
 
 testWinner :: IO ()
 testWinner = do
@@ -230,12 +239,3 @@ testWinner = do
     putStrLn (showBoard b5)
     putStrLn (show [isWinner b5 (i,boardSize-i-1) | i <- [0..4]])
 
-maintest :: IO ()
-maintest = do 
-        g <- getStdGen
-        --let zero = 0.0
-        --let one = 1.0
-        let rs = randomRs (0.0,1.0) g
-        let (_,b,l) = autoPlayRollout emptyBoard SQBlack rs
-        putStrLn (showBoard b)
-        putStrLn (show l)

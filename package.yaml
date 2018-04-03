@@ -29,6 +29,8 @@ library:
   dependencies:
   - vector
   - random
+  - containers
+  - haxl
 
 executables:
   mctsGames-exe:
@@ -42,6 +44,10 @@ executables:
 
     dependencies:
     - mctsGames
+    - haxl
+    - text
+    - hashable
+    - random
 
 tests:
   mctsGames-test:
