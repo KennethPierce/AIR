@@ -5,9 +5,9 @@ import qualified Data.Sequence as S
 import System.Random
 
 boardSize :: Int
-boardSize = 9
+boardSize = 7
 winLength :: Int
-winLength = 5
+winLength = 4
 
 data Square 
     = SQEmpty 
@@ -162,40 +162,35 @@ selectTopRandomly mctss totalPlays r = selectIt [] mctss r
             
 
 oneMctsUpdate :: Mcts -> Int -> [Float]-> (Mcts,Square)
-oneMctsUpdate mcts totalPlays (r:rs) =
-    --select
-    if (plays mcts) /= 0 
-    then
-        let  
-            --select/expand
-            (leftRev,randTop,right) = selectTopRandomly (children mcts) totalPlays r
-            left = Prelude.reverse leftRev
-            (mctsNew,winnerSq) = oneMctsUpdate randTop totalPlays rs
-            --backprop
-            newWins = (wins mcts) + if winnerSq == (player mcts) then 1 else 0
-            newChildren = left Prelude.++ (mctsNew:right)
-            newPlays = (plays mcts) + 1
-            --ret = MkMcts (board mcts) (player mcts) (moves mcts) newWins newPlays newChildren
-            ret = mcts {wins=newWins, plays=newPlays, children=newChildren}
-        in
-        (ret,winnerSq)
-    else
+oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 _ _) totalPlays (r:rs) = (mcts {plays = 1,wins = numWins},winner)
+    where
         --rollout (playout)
-        let 
-            gameWon = won mcts
-            winner = if gameWon == SQEmpty then autoPlayRollout mcts rs else gameWon
-            numWins = if winner == (player mcts) then 1 else 0
-        in 
-            (mcts {plays = 1,wins = numWins},winner)
+        gameWon = won mcts
+        winner = if gameWon == SQEmpty then autoPlayRollout mcts rs else gameWon
+        numWins = if winner == (player mcts) then 1 else 0        
+oneMctsUpdate mcts totalPlays (r:rs) = (ret,winnerSq)
+    where 
+        --select/expand
+        (leftRev,randTop,right) = selectTopRandomly (children mcts) totalPlays r
+        left = Prelude.reverse leftRev
+        (mctsNew,winnerSq) = oneMctsUpdate randTop totalPlays rs
+        --backprop
+        newWins = (wins mcts) + if winnerSq == (player mcts) then 1 else 0
+        newChildren = left Prelude.++ (mctsNew:right)
+        newPlays = (plays mcts) + 1
+        --ret = MkMcts (board mcts) (player mcts) (moves mcts) newWins newPlays newChildren
+        ret = mcts {wins=newWins, plays=newPlays, children=newChildren}
+            
 
 
-mctsUpdates :: Mcts -> Int -> IO Mcts
-mctsUpdates mcts cnt = do 
-    g <- newStdGen
-    let rs = randomRs (0.0,1.0) g    
-    let totPlays = plays mcts
-    let (mcts',_) = oneMctsUpdate mcts totPlays rs
-    if cnt <= 0 then pure mcts else mctsUpdates mcts' (cnt-1)
+mctsUpdates :: Mcts -> Int -> [Int] -> Mcts
+mctsUpdates mcts cnt (i:is) = res
+    where 
+        g = mkStdGen i
+        rs = randomRs (0.0,1.0) g    
+        totPlays = plays mcts
+        (mcts',_) = oneMctsUpdate mcts totPlays rs
+        res = if cnt <= 0 then mcts else mctsUpdates mcts' (cnt-1) is
 
 --reusing stats from previous plays
 selectTopMoveDet :: Mcts -> Mcts
@@ -209,8 +204,10 @@ selectTopMoveDet mcts = mcts'
 
 selfPlay :: Mcts -> Int -> IO ()
 selfPlay mcts cnt = do    
+    gen <- newStdGen
+    let rs = (randoms gen) :: [Int]
     putStrLn  (showBoard (board mcts))
-    mctsUpdate <- mctsUpdates mcts cnt
+    let mctsUpdate = mctsUpdates mcts cnt rs
     let mcts' = selectTopMoveDet mctsUpdate
     if won mcts /= SQEmpty
     then putStrLn (show (won mcts))
