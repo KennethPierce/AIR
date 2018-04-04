@@ -1,8 +1,12 @@
 module Lib where
 
 import Data.Vector
-import qualified Data.Sequence as S
 import System.Random
+
+import qualified Data.Hashable -- for haxl
+import qualified Data.Typeable -- for haxl
+import qualified Haxl.Core --for batching call to TF inferences
+import qualified Control.Monad.Identity
 
 boardSize :: Int
 boardSize = 7
@@ -17,6 +21,12 @@ data Square
 
 type Board = Vector Square
 type Loc = (Int,Int)
+type RandInts = [Int]
+type RandFloats = [Float]
+type HaxlId  = Control.Monad.Identity.Identity 
+
+runHaxlId :: HaxlId a -> a
+runHaxlId = Control.Monad.Identity.runIdentity
 
 emptyBoard :: Board 
 emptyBoard = Data.Vector.replicate (boardSize*boardSize) SQEmpty
@@ -117,8 +127,11 @@ initialMcts b player won = MkMcts b player vmoves 0 0 won [initialMcts b' nextPl
         boardsWins = [(b1,thisWins won b1 l1 vmoves) | (b1,l1) <- boardsLocs]
 
 --if no moves available then winner is player 
-autoPlayRollout :: Mcts -> [Float] -> Square
-autoPlayRollout mcts (r:rs) = if winVal == SQEmpty then autoPlayRollout mcts' rs else winVal
+autoPlayRollout :: Mcts -> RandFloats -> HaxlId Square
+autoPlayRollout mcts (r:rs) = do 
+    if winVal == SQEmpty 
+    then autoPlayRollout mcts' rs 
+    else pure winVal
     where
         b = board mcts
         s = player mcts
@@ -162,25 +175,29 @@ selectTopRandomly mctss totalPlays r = selectIt [] mctss r
 
             
 
-oneMctsUpdate :: Mcts -> Int -> [Float]-> (Mcts,Square)
-oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _) totalPlays (r:rs) = (mcts {plays = 1,wins = numWins},winner)
+oneMctsUpdate :: Mcts -> Int -> RandFloats -> HaxlId (Mcts,Square)
+oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _) totalPlays (r:rs) = do 
+    winner <- hwinner
+    let numWins = if winner == (player mcts) then 1 else 0  
+    pure (mcts {plays = 1,wins = numWins},winner)
     where
         --rollout (playout)
-        winner = if gameWon == SQEmpty then autoPlayRollout mcts rs else gameWon
-        numWins = if winner == (player mcts) then 1 else 0        
-oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _) totalPlays (r:rs) = (ret,winnerSq)
+        hwinner = if gameWon == SQEmpty then autoPlayRollout mcts rs else pure gameWon
+oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _) totalPlays (r:rs) = do 
+    (mctsNew,winnerSq) <- oneMctsUpdate randTop totalPlays rs
+    let     
+        newChildren = left Prelude.++ (mctsNew:right)
+        newPlays = (plays mcts) + 1
+        --backprop
+        newWins = (wins mcts) + if winnerSq == (player mcts) then 1 else 0
+        ret = mcts {wins=newWins, plays=newPlays, children=newChildren}        
+    pure (ret,winnerSq)
     where 
         --select/expand
         (leftRev,randTop,right) = selectTopRandomly (children mcts) totalPlays r
         left = Prelude.reverse leftRev
-        (mctsNew,winnerSq) = oneMctsUpdate randTop totalPlays rs
-        --backprop
-        newWins = (wins mcts) + if winnerSq == (player mcts) then 1 else 0
-        newChildren = left Prelude.++ (mctsNew:right)
-        newPlays = (plays mcts) + 1
-        --ret = MkMcts (board mcts) (player mcts) (moves mcts) newWins newPlays newChildren
-        ret = mcts {wins=newWins, plays=newPlays, children=newChildren}
-oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) totalPlays (r:rs) = (ret,winner)
+oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) totalPlays (r:rs) = do
+    pure (ret,winner)
     where  
         newPlays = (plays mcts) + 1
         newWins = (wins mcts) + if winner == (player mcts) then 1 else 0
@@ -189,14 +206,15 @@ oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) totalPlays (r:rs) = (ret,winner)
             
 
 
-mctsUpdates :: Mcts -> Int -> [Int] -> Mcts
-mctsUpdates mcts cnt (i:is) = res
+mctsUpdates :: Mcts -> Int -> RandInts ->  HaxlId Mcts
+mctsUpdates mcts cnt (i:is) = do
+    (mcts',_) <- oneMctsUpdate mcts totPlays rs
+    let res = if cnt <= 0 then pure mcts else mctsUpdates mcts' (cnt-1) is
+    res
     where 
         g = mkStdGen i
         rs = randomRs (0.0,1.0) g    
         totPlays = plays mcts
-        (mcts',_) = oneMctsUpdate mcts totPlays rs
-        res = if cnt <= 0 then mcts else mctsUpdates mcts' (cnt-1) is
 
 --reusing stats from previous plays
 selectTopMoveDet :: Mcts -> Mcts
@@ -208,12 +226,16 @@ selectTopMoveDet mcts = mcts'
           b = board mcts'
           w = won mcts'
 
+selfPlays :: [Mcts] -> Int -> RandInts ->  [Mcts]
+selfPlays mctss cnt rs = undefined
+    
+
 selfPlay :: Mcts -> Int -> IO ()
 selfPlay mcts cnt = do    
     gen <- newStdGen
     let rs = (randoms gen) :: [Int]
     putStrLn  (showBoard (board mcts))
-    let mctsUpdate = mctsUpdates mcts cnt rs
+    let mctsUpdate = runHaxlId (mctsUpdates mcts cnt rs)
     let mcts' = selectTopMoveDet mctsUpdate
     if won mcts /= SQEmpty
     then putStrLn (show (won mcts))

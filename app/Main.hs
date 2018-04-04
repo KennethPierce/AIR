@@ -25,11 +25,16 @@ import Data.Traversable (for)
 import Data.Typeable
 import Haxl.Core
 import System.Random
+import Lib
 
 import qualified Data.Text as Text
 
 main :: IO ()
 main = do
+  selfPlay mctsInitBoard 200
+
+main1 :: IO ()
+main1 = do
   let stateStore = stateSet UserState{} stateEmpty
   env0 <- initEnv stateStore ()
   names <- runHaxl env0 getAllUsernames
@@ -98,20 +103,28 @@ instance DataSource u UserReq where
       allIdVars = [r | BlockedFetch GetAllIds r <- blockedFetches]
       doAllIdVars :: IO ()
       doAllIdVars = do
-        allIds <- sql "select id from ids"
+        --allIds <- sql "select id from ids"
+        let allIds = [1..5]
+        putStrLn ("allIdVars " ++ (show allIds))
         mapM_ (\r -> putSuccess r allIds) allIdVars
-  
 
+    unless (null allIdVars) doAllIdVars
+  
+    let
       params :: [Id]
       aliases :: [ResultVar Id]
       (params,aliases) = unzip 
-        [(userId+100, r) | BlockedFetch (GetAlias userId) r <- blockedFetches]
+        [(userId, r) | BlockedFetch (GetAlias userId) r <- blockedFetches]
 
       doAliases :: IO ()
       doAliases = do 
-        aliasIds <- sql ("alias ids " ++ show (params))
-        mapM_ (\r -> putSuccess r aliasIds) aliases
-  
+        --aliasIds <- sql ("alias ids " ++ show (params))
+        let aliasIds = [i+101 | i <- params]
+        putStrLn ("alias " ++ (show aliasIds))
+        mapM_ (uncurry putSuccess) (zip aliases aliasIds)
+    unless (null aliases)  doAliases
+
+    let
       ids :: [Id]
       vars :: [ResultVar Name]
       (ids, vars) = unzip
@@ -122,34 +135,8 @@ instance DataSource u UserReq where
       
       doGetNameById :: IO ()
       doGetNameById = do
-        names <- sql $ unwords
-          [ "select name from names where"
-          , intercalate " or " $ map ("id = " ++) idStrings
-          , "order by find_in_set(id, '" ++ intercalate "," idStrings ++ "')"
-          ]
+        let names = ["Jim_" | _ <- idStrings]
+        putStrLn ("getnamebyid " ++ (show ids))
         mapM_ (uncurry putSuccess) (zip vars names)
-
-
-    unless (null allIdVars) doAllIdVars
-
-    unless (null aliases)  doAliases
-
     unless (null ids) doGetNameById
 
--- Mock SQL API.
-
-class SQLResult a where
-  mockResult :: IO a
-
-instance SQLResult a => SQLResult [a] where
-  mockResult = replicateM 15 mockResult
-
-instance SQLResult Name where
-  -- An infinite number of employees, all named Jim.
-  mockResult = ("Jim" `Text.append`) . Text.pack . show <$> randomRIO (1::Int, 100)
-
-instance SQLResult Id where
-  mockResult = randomRIO (1, 100)
-
-sql :: SQLResult a => String -> IO a
-sql query = print query >> mockResult

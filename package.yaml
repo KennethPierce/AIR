@@ -30,7 +30,9 @@ library:
   - vector
   - random
   - containers
+  - hashable  
   - haxl
+  - mtl
 
 executables:
   mctsGames-exe:
