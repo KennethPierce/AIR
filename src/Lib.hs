@@ -1,3 +1,13 @@
+-- Necessary:
+--{-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE InstanceSigs #-}
+
 module Lib where
 
 import Data.Vector
@@ -6,7 +16,6 @@ import System.Random
 import qualified Data.Hashable -- for haxl
 import qualified Data.Typeable -- for haxl
 import qualified Haxl.Core --for batching call to TF inferences
-import qualified Control.Monad.Identity
 
 boardSize :: Int
 boardSize = 7
@@ -23,10 +32,24 @@ type Board = Vector Square
 type Loc = (Int,Int)
 type RandInts = [Int]
 type RandFloats = [Float]
-type HaxlId  = Control.Monad.Identity.Identity 
+--type HaxlState = Haxl.Core.State
 
-runHaxlId :: HaxlId a -> a
-runHaxlId = Control.Monad.Identity.runIdentity
+
+type HaxlId = Haxl.Core.GenHaxl ()
+runHaxlId :: HaxlId a -> IO (a)
+runHaxlId haxlid = do
+  let stateStore = Haxl.Core.stateSet TensorFlowState{} Haxl.Core.stateEmpty
+  env0 <- Haxl.Core.initEnv stateStore ()
+  Haxl.Core.runHaxl env0 haxlid
+
+data TensorFlowReq a where
+    GetInference :: TensorFlowReq () 
+    deriving (Data.Typeable.Typeable)
+
+instance Haxl.Core.StateKey TensorFlowReq where
+    data State TensorFlowReq = TensorFlowState {}
+
+
 
 emptyBoard :: Board 
 emptyBoard = Data.Vector.replicate (boardSize*boardSize) SQEmpty
@@ -235,7 +258,7 @@ selfPlay mcts cnt = do
     gen <- newStdGen
     let rs = (randoms gen) :: [Int]
     putStrLn  (showBoard (board mcts))
-    let mctsUpdate = runHaxlId (mctsUpdates mcts cnt rs)
+    mctsUpdate <- runHaxlId (mctsUpdates mcts cnt rs)
     let mcts' = selectTopMoveDet mctsUpdate
     if won mcts /= SQEmpty
     then putStrLn (show (won mcts))
