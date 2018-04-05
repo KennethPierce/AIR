@@ -7,15 +7,23 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE FlexibleInstances #-}
+--{-# LANGUAGE DeriveAnyClass #-}
+
 
 module Lib where
 
+import Data.Vector.Instances -- hashing
 import Data.Vector
 import System.Random
 
+
+import qualified Control.Monad
+import qualified Data.List
 import qualified Data.Hashable -- for haxl
 import qualified Data.Typeable -- for haxl
 import qualified Haxl.Core --for batching call to TF inferences
+
 
 boardSize :: Int
 boardSize = 7
@@ -26,13 +34,18 @@ data Square
     = SQEmpty 
     | SQBlack 
     | SQWhite 
-    deriving (Eq,Show)
+    deriving (Eq,Show,Enum)
+
+instance Data.Hashable.Hashable Square where
+    hashWithSalt s sq = Data.Hashable.hashWithSalt s (0::Int, fromEnum sq)
+    
+
 
 type Board = Vector Square
 type Loc = (Int,Int)
 type RandInts = [Int]
 type RandFloats = [Float]
---type HaxlState = Haxl.Core.State
+
 
 
 type HaxlId = Haxl.Core.GenHaxl ()
@@ -42,14 +55,40 @@ runHaxlId haxlid = do
   env0 <- Haxl.Core.initEnv stateStore ()
   Haxl.Core.runHaxl env0 haxlid
 
+getInference :: Board -> HaxlId ([Float],Float)
+getInference b = Haxl.Core.dataFetch (GetInference b)
+
 data TensorFlowReq a where
-    GetInference :: TensorFlowReq () 
+    GetInference :: Board -> TensorFlowReq ([Float],Float) 
     deriving (Data.Typeable.Typeable)
+
+
+deriving instance Eq (TensorFlowReq a)
+deriving instance Show (TensorFlowReq a)
+instance Haxl.Core.ShowP TensorFlowReq where showp = show
+
+instance Data.Hashable.Hashable (TensorFlowReq a) where
+    hashWithSalt s (GetInference a) = Data.Hashable.hashWithSalt s (0::Int, a)
+ 
+instance Haxl.Core.DataSourceName TensorFlowReq where
+    dataSourceName _ = "TensorFlowData"
 
 instance Haxl.Core.StateKey TensorFlowReq where
     data State TensorFlowReq = TensorFlowState {}
 
-
+instance Haxl.Core.DataSource u TensorFlowReq where
+--  fetch :: State req -> Flags -> u -> [BlockedFetch req] -> PerformFetch
+    fetch _state _flags _userEnv blockedFetches = Haxl.Core.SyncFetch $  do
+        let 
+            boards :: [Board]
+            resultVarInferences :: [Haxl.Core.ResultVar ([Float],Float)]
+            (boards,resultVarInferences) = Data.List.unzip [(board, r) | Haxl.Core.BlockedFetch (GetInference board) r <- blockedFetches]
+            batchGetInference :: IO ()
+            batchGetInference = do
+                putStrLn "Batched call"
+                let results = [([],0) | _ <- [0..]  ]
+                Control.Monad.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
+        Control.Monad.unless (Data.List.null resultVarInferences) batchGetInference
 
 emptyBoard :: Board 
 emptyBoard = Data.Vector.replicate (boardSize*boardSize) SQEmpty
@@ -122,8 +161,6 @@ selectMoveRandomly ((f,l):mps) rand idx =
     then (l,idx) 
     else selectMoveRandomly mps (rand-f) (idx+1)
                                         
-
-
 
 data Mcts = MkMcts 
     {board :: Board
