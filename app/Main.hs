@@ -30,8 +30,7 @@ import Lib
 import qualified Data.Text as Text
 
 main :: IO ()
-main = do
-  selfPlay mctsInitBoard 200
+main = selfPlaysIO
 
 main1 :: IO ()
 main1 = do
