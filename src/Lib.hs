@@ -46,7 +46,7 @@ type Board = Vector Square
 type Loc = (Int,Int)
 type RandInts = [Int]
 type RandFloats = [Float]
-
+type History = [Int]
 
 
 type HaxlId = Haxl.Core.GenHaxl ()
@@ -173,10 +173,28 @@ selectMoveRandomly ((f,l):mps) rand idx =
     else selectMoveRandomly mps (rand-f) (idx+1)
                                         
 
+board :: Mcts -> Board
+board mcts = board
+    where
+        h = history mcts
+        p = player mcts
+        l pl = pl : other pl : l pl
+        other SQBlack = SQWhite
+        other SQWhite = SQBlack
+        z = Data.List.zip  h (l p)
+        b = Data.Vector.replicate  (boardSize*boardSize) SQEmpty
+        board = b  // z
+
+moves :: Mcts -> [Loc]
+moves mcts = [quotRem i boardSize | i <- diff] 
+    where
+        h = history mcts
+        diff = [0..(boardSize*boardSize-1)] Data.List.\\ h
+
 data Mcts = MkMcts 
-    {board :: Board
+    {history :: History
     ,player :: Square
-    ,moves :: [Loc]
+    ,moves_:: ()
     ,wins :: Int
     ,plays :: Int
     ,won :: Square
@@ -186,16 +204,19 @@ data Mcts = MkMcts
 showMcts :: Mcts -> String
 showMcts mcts = (showBoard (board mcts)) Prelude.++ (show (player mcts)) Prelude.++ (show (moves mcts)) Prelude.++ (show (won mcts))
 
-initialMcts :: Board -> Square -> Square -> Mcts
-initialMcts b player won = MkMcts b player vmoves 0 0 won [initialMcts b' nextPlayer w' | (b',w') <- boardsWins]
+initialMcts :: [Int] -> Square -> Square -> Mcts
+initialMcts hs player won = MkMcts hs player () 0 0 won [initialMcts h' nextPlayer w' | (h',w') <- boardsWins]
     where 
+        b = board (MkMcts hs player () 0 0 SQEmpty [])
         vmoves = (getValidMoves b)
         nextPlayer = if player == SQWhite then SQBlack else SQWhite
-        boardsLocs = [(b // [((x*boardSize+y),nextPlayer)],(x,y)) | (x,y) <- vmoves]
+        boardsLocs :: [(Board,Int,Loc)]
+        boardsLocs = [(b // [((x*boardSize+y),nextPlayer)],x*boardSize+y,(x,y)) | (x,y) <- vmoves]
         thisWins SQEmpty b l (_:[]) = nextPlayer 
         thisWins SQEmpty b l _  = if  isWinner b l then nextPlayer else SQEmpty
         thisWins sq _ _ _ = sq
-        boardsWins = [(b1,thisWins won b1 l1 vmoves) | (b1,l1) <- boardsLocs]
+        boardsWins :: [(History,Square)]
+        boardsWins = [(h:hs,thisWins won b1 l1 vmoves) | (b1,h,l1) <- boardsLocs]
 
 --if no moves available then winner is player 
 autoPlayRollout :: Mcts -> RandFloats -> HaxlId Square
@@ -253,7 +274,8 @@ oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _) totalPlays (r:rs) = do
     pure (mcts {plays = 1,wins = numWins},winner)
     where
         --rollout (playout)
-        hwinner = if gameWon == SQEmpty then autoPlayRollout mcts rs else pure gameWon
+        mctsCopy = mcts {plays=0} -- make a copy to reduce memory usage
+        hwinner = if gameWon == SQEmpty then autoPlayRollout mctsCopy rs else pure gameWon
 oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _) totalPlays (r:rs) = do 
     (mctsNew,winnerSq) <- oneMctsUpdate randTop totalPlays rs
     let     
@@ -320,13 +342,13 @@ selfPlaysIO :: IO ()
 selfPlaysIO = do 
     g <- newStdGen
     let rs = randoms g
-    let mctss = Data.List.replicate 100 mctsInitBoard
-    mctss' <- runHaxlId (selfPlays mctss 1000 rs)
+    let mctss = Data.List.replicate 20 mctsInitBoard
+    mctss' <- runHaxlId (selfPlays mctss 20 rs)
     _ <- Data.Traversable.for mctss' (\mcts -> putStrLn (showBoard (board mcts)))
     pure ()
 
 mctsInitBoard :: Mcts
-mctsInitBoard = initialMcts emptyBoard SQBlack SQEmpty
+mctsInitBoard = initialMcts [] SQBlack SQEmpty
 
 testWinner :: IO ()
 testWinner = do
