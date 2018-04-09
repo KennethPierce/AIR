@@ -14,8 +14,11 @@
 module Lib where
 
 import Data.Vector.Instances() -- hashing
-import Data.Vector
+import qualified Data.Vector.Unboxed as V
 import System.Random
+
+import qualified Control.Exception 
+import qualified Debug.Trace
 
 import qualified Data.Traversable 
 --import qualified Data.MessagePack
@@ -42,7 +45,7 @@ instance Data.Hashable.Hashable Square where
     
 
 
-type Board = Vector Square
+type Board = (V.Vector Bool,V.Vector Bool)
 type Loc1 = (Int,Int)
 type Loc = Int
 type RandInts = [Int]
@@ -60,11 +63,11 @@ runHaxlId haxlid = do
   let env1 = env0{Haxl.Core.flags=flag1} -- turn off caching between calls to runHaxlId (memleak)
   Haxl.Core.runHaxl env1 haxlid
 
-getInference :: Board -> HaxlId (Vector Float,Float)
-getInference b = Haxl.Core.dataFetch (GetInference b)
+getInference :: Board -> HaxlId (V.Vector Float,Float)
+getInference b = Haxl.Core.uncachedRequest  (GetInference b)
 
 data TensorFlowReq a where
-    GetInference :: Board -> TensorFlowReq (Vector Float,Float) 
+    GetInference :: Board -> TensorFlowReq (V.Vector Float,Float) 
     deriving (Data.Typeable.Typeable)
 
 
@@ -81,8 +84,8 @@ instance Haxl.Core.DataSourceName TensorFlowReq where
 instance Haxl.Core.StateKey TensorFlowReq where
     data State TensorFlowReq = TensorFlowState {}
 
-vectOne :: Data.Vector.Vector Float
-vectOne = Data.Vector.replicate (boardSize*boardSize) 1.0
+vectOne :: V.Vector Float
+vectOne = V.replicate (boardSize*boardSize) 1.0
 
 
 instance Haxl.Core.DataSource u TensorFlowReq where
@@ -90,33 +93,47 @@ instance Haxl.Core.DataSource u TensorFlowReq where
     fetch _state _flags _userEnv blockedFetches = Haxl.Core.SyncFetch $  do
         let 
             _b :: [Board]
-            resultVarInferences :: [Haxl.Core.ResultVar (Vector Float,Float)]
+            resultVarInferences :: [Haxl.Core.ResultVar (V.Vector Float,Float)]
             (_b,resultVarInferences) = Data.List.unzip [(b1, r) | Haxl.Core.BlockedFetch (GetInference b1) r <- blockedFetches]
             batchGetInference :: IO ()
             batchGetInference = do
-                --putStrLn (showBoard (Data.List.head boards))
+                --putStrLn (showBoard (Data.List.head _b))
                 --putStrLn ("Batched call " Data.List.++ (show (Data.List.length resultVarInferences)))
                 let results = [(vectOne,0) | _ <- ([0..] :: [Int])  ] 
                 Control.Monad.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
         Control.Monad.unless (Data.List.null resultVarInferences) batchGetInference
 
 emptyBoard :: Board 
-emptyBoard = Data.Vector.replicate (boardSize*boardSize) SQEmpty
+emptyBoard = (V.replicate (boardSize*boardSize) False,V.replicate (boardSize*boardSize) False)
 
-boardIndex :: Loc1 -> Int
-boardIndex (x,y) = x*boardSize + y
+boardIndexL :: Loc1 -> Int
+boardIndexL (x,y) = x*boardSize + y
 
-boardValue :: Board -> Loc1 -> Square
-boardValue b l = b ! (boardIndex l)
+boardValueL :: Board -> Loc1 -> Square
+boardValueL b l = b `boardIndex` (boardIndexL l)
 
-boardSet :: Board -> Loc1 -> Square -> Board
-boardSet b (x,y) s = b // [(i,s)]
+boardSetL :: Board -> Loc1 -> Square -> Board
+boardSetL b (x,y) s = b `boardSet` [(i,s)]
     where 
         i = x*boardSize + y
 
+boardIndex :: Board -> Int -> Square
+boardIndex (bb,bw) i = toSquare (bb V.! i) (bw V.! i)
+    where 
+        toSquare True _ = SQBlack
+        toSquare _ True = SQWhite
+        toSquare True True = Control.Exception.assert False  SQEmpty
+        toSquare _ _ = SQEmpty
+
+boardSet :: Board -> [(Int,Square)] -> Board
+boardSet b [] = b
+boardSet (bb,bw) ((i,SQBlack):us) = boardSet (bb V.// [(i,True)],bw) us
+boardSet (bb,bw) ((i,SQWhite):us) = boardSet (bb,bw V.// [(i,True)]) us
+boardSet (bb,bw) ((i,SQEmpty):us) = boardSet (bb V.// [(i,False)],bw V.// [(i,False)]) us
+
 countDir :: Board -> Int -> Loc1 -> Loc1 -> Int
 countDir b cnt (x,y) (x',y') =
-    if valid (x+x',y+y') && boardValue b (x,y) == boardValue b (x+x',y+y') 
+    if valid (x+x',y+y') && boardValueL b (x,y) == boardValueL b (x+x',y+y') 
     then countDir b (cnt+1) (x+x',y+y') (x',y')
     else cnt
         where 
@@ -134,8 +151,8 @@ isWinner b l = Prelude.any (>=winLength) ls
         ls = [1 + countDir b 0 l' (x,y) + countDir b 0 l' (-x,-y) | (x,y) <- directions]
 
 thisWins :: Square -> Board -> Loc -> [Loc] -> Square
-thisWins SQEmpty b l (_:[]) =  b!l 
-thisWins SQEmpty b l _  = if  isWinner b l then b!l else SQEmpty
+thisWins SQEmpty b l (_:[]) =  b `boardIndex` l 
+thisWins SQEmpty b l _  = if  isWinner b l then b `boardIndex` l else SQEmpty
 thisWins sq _ _ _ = sq
 
 
@@ -149,14 +166,14 @@ showBoard b = unlines ls
         ls = do 
             let bs = [0..(boardSize-1)]
             i <- bs
-            return [squareToChar (b ! (i*boardSize+j)) | j <- bs]
+            return [squareToChar (b `boardIndex` (i*boardSize+j)) | j <- bs]
 
 
 -- Needs to fix invalid move probabilities            
 getMoveProbabilities :: Board -> Square -> [Loc] -> HaxlId [(Float,Loc)]
 getMoveProbabilities b sq ls = do 
     (probs,_) <- getInference b'
-    let validMoves = [probs ! i | i <- ls]
+    let validMoves = [probs V.! i | i <- ls]
     let sumVal = Prelude.sum validMoves
     let probs' = [i / sumVal | i <- validMoves]
     pure (Data.List.zip probs' ls)
@@ -165,10 +182,7 @@ getMoveProbabilities b sq ls = do
         --Minimize learning time.
         b' = flipBoardIfWhite sq b
         flipBoardIfWhite SQBlack b1 = b1
-        flipBoardIfWhite _ b1 = fmap flipSq b1
-        flipSq SQEmpty = SQEmpty
-        flipSq SQBlack = SQWhite
-        flipSq SQWhite = SQBlack
+        flipBoardIfWhite _ (bb,bw) = (bw,bb)
 
 --selectMoveRandomly [] _ = Left "error: no move selected. rand > 1 or move probs don't add to 1"
 selectMoveRandomly :: [(Float,Loc)] -> Float -> Int -> (Loc,Int)
@@ -182,7 +196,7 @@ selectMoveRandomly ((f,l):mps) rand idx =
 
 
 moves :: Mcts -> [Loc]
-moves mcts = [i | i <- [0..(boardSize*boardSize-1)], b ! i == SQEmpty ] 
+moves mcts = [i | i <- [0..(boardSize*boardSize-1)], b `boardIndex` i == SQEmpty ] 
     where 
         b = board mcts
 
@@ -205,7 +219,7 @@ initialMcts b p w = MkMcts b p () 0 0 w [initialMcts b' nextPlayer w' | (b',w') 
         vmoves = moves (MkMcts b p () 0 0 w [])
         nextPlayer = if p == SQWhite then SQBlack else SQWhite
         boardsLocs :: [(Board,Loc)]
-        boardsLocs = [(b // [(i,nextPlayer)],i) | i  <- vmoves]
+        boardsLocs = [(b `boardSet` [(i,nextPlayer)],i) | i  <- vmoves]
         boardsWins :: [(Board,Square)]
         boardsWins = [(b1,thisWins w b1 l1 vmoves) | (b1,l1) <- boardsLocs]
 
@@ -215,9 +229,9 @@ autoPlayRollout (MkMcts _ _ _ _ _ SQBlack _) _ = pure SQBlack
 autoPlayRollout (MkMcts _ _ _ _ _ SQWhite _) _ = pure SQWhite
 autoPlayRollout mcts@(MkMcts b p _ _ _ w _) (r:rs) = do 
     mps <- getMoveProbabilities b p ls
-    let (_,idx) = selectMoveRandomly mps r 0 
-    let b' = b // [(idx,nextPlayer)]
-    let newWin = if w /= SQEmpty then w else thisWins w b' idx ls
+    let (l,_idx) = selectMoveRandomly mps r 0 
+    let b' = Control.Exception.assert (b `boardIndex` l == SQEmpty) (b `boardSet` [(l,nextPlayer)])
+    let newWin = thisWins w b' l ls
     let mcts' = MkMcts b' nextPlayer () 0 0 newWin []
     autoPlayRollout mcts' rs 
     where
@@ -290,10 +304,12 @@ oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) _ _ = do
 
 
 mctsUpdates :: Mcts -> Int -> RandInts ->  HaxlId Mcts
+mctsUpdates mcts 0 _ = Debug.Trace.trace tracemsg (pure mcts)
+    where 
+        tracemsg = " moveCnt="++show (length (moves mcts))
 mctsUpdates mcts cnt (i:is) = do
-    (mcts',_) <- oneMctsUpdate mcts totPlays rs
-    let res = if cnt <= 0 then pure mcts else mctsUpdates mcts' (cnt-1) is
-    res
+    (mcts',_) <-  oneMctsUpdate mcts totPlays rs
+    mctsUpdates mcts' (cnt-1) is
     where 
         g = mkStdGen i
         rs = randomRs (0.0,1.0) g    
@@ -340,21 +356,21 @@ mctsInitBoard = initialMcts (emptyBoard) SQBlack SQEmpty
 
 testWinner :: IO ()
 testWinner = do
-    let b = Data.Vector.replicate (boardSize*boardSize) SQBlack
+    let b = (V.replicate (boardSize*boardSize) True,V.replicate (boardSize*boardSize) False)
     putStrLn (showBoard b)
     putStrLn (show (countDir b 0 (3,3) (1,1)))  
     putStrLn (show (isWinner_ b (0,0)))
     let e = emptyBoard
-    let h5 = e // [(i,SQBlack) | i <- [0..4]]
+    let h5 = e `boardSet` [(i,SQBlack) | i <- [0..4]]
     putStrLn (showBoard h5)
     putStrLn (show [isWinner_ h5 (0,i) | i <- [0..4]])
-    let v5 = e // [(i*boardSize,SQBlack) | i <- [0..4]]
+    let v5 = e `boardSet` [(i*boardSize,SQBlack) | i <- [0..4]]
     putStrLn (showBoard v5)
     putStrLn (show [isWinner_ v5 (i,0) | i <- [0..4]])
-    let s5 = e // [(i*boardSize+i,SQBlack) | i <- [0..4]]
+    let s5 = e `boardSet` [(i*boardSize+i,SQBlack) | i <- [0..4]]
     putStrLn (showBoard s5)
     putStrLn (show [isWinner_ s5 (i,i) | i <- [0..4]])
-    let b5 = e // [(i*boardSize+boardSize-i-1,SQBlack) | i <- [0..4]]
+    let b5 = e `boardSet` [(i*boardSize+boardSize-i-1,SQBlack) | i <- [0..4]]
     putStrLn (showBoard b5)
     putStrLn (show [isWinner_ b5 (i,boardSize-i-1) | i <- [0..4]])
     where
