@@ -13,18 +13,18 @@
 
 module Lib where
 
-import Data.Vector.Instances -- hashing
+import Data.Vector.Instances() -- hashing
 import Data.Vector
 import System.Random
 
 import qualified Data.Traversable 
-import qualified Data.MessagePack
+--import qualified Data.MessagePack
 import qualified Control.Monad
 import qualified Data.List
 import qualified Data.Hashable -- for haxl
 import qualified Data.Typeable -- for haxl
 import qualified Haxl.Core --for batching call to TF inferences
-import qualified Data.ByteString as BS
+--import qualified Data.ByteString as BS
 
 boardSize :: Int
 boardSize = 7
@@ -81,19 +81,22 @@ instance Haxl.Core.DataSourceName TensorFlowReq where
 instance Haxl.Core.StateKey TensorFlowReq where
     data State TensorFlowReq = TensorFlowState {}
 
+vectOne :: Data.Vector.Vector Float
+vectOne = Data.Vector.replicate (boardSize*boardSize) 1.0
+
+
 instance Haxl.Core.DataSource u TensorFlowReq where
 --  fetch :: State req -> Flags -> u -> [BlockedFetch req] -> PerformFetch
     fetch _state _flags _userEnv blockedFetches = Haxl.Core.SyncFetch $  do
         let 
-            boards :: [Board]
+            _b :: [Board]
             resultVarInferences :: [Haxl.Core.ResultVar (Vector Float,Float)]
-            (boards,resultVarInferences) = Data.List.unzip [(board, r) | Haxl.Core.BlockedFetch (GetInference board) r <- blockedFetches]
+            (_b,resultVarInferences) = Data.List.unzip [(b1, r) | Haxl.Core.BlockedFetch (GetInference b1) r <- blockedFetches]
             batchGetInference :: IO ()
             batchGetInference = do
                 --putStrLn (showBoard (Data.List.head boards))
                 --putStrLn ("Batched call " Data.List.++ (show (Data.List.length resultVarInferences)))
-                let vectOne = Data.Vector.replicate (boardSize*boardSize) 1.0
-                let results = [(vectOne,0) | _ <- [0..]  ]
+                let results = [(vectOne,0) | _ <- ([0..] :: [Int])  ] 
                 Control.Monad.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
         Control.Monad.unless (Data.List.null resultVarInferences) batchGetInference
 
@@ -119,7 +122,7 @@ countDir b cnt (x,y) (x',y') =
         where 
             valid (-1,_) = False                                     
             valid (_,-1) = False
-            valid (a,b) = not ( a == boardSize || b == boardSize)
+            valid (a1,b1) = not ( a1 == boardSize || b1 == boardSize)
 -- | does player win after moving to location 
 isWinner :: Board -> Loc -> Bool
 isWinner b l = Prelude.any (>=winLength) ls
@@ -152,7 +155,7 @@ showBoard b = unlines ls
 -- Needs to fix invalid move probabilities            
 getMoveProbabilities :: Board -> Square -> [Loc] -> HaxlId [(Float,Loc)]
 getMoveProbabilities b sq ls = do 
-    (probs,score) <- getInference b'
+    (probs,_) <- getInference b'
     let validMoves = [probs ! i | i <- ls]
     let sumVal = Prelude.sum validMoves
     let probs' = [i / sumVal | i <- validMoves]
@@ -161,11 +164,11 @@ getMoveProbabilities b sq ls = do
         --Alway send board as if player Black moves next.
         --Minimize learning time.
         b' = flipBoardIfWhite sq b
-        flipBoardIfWhite SQBlack b = b
-        flipBoardIfWhite _ b = fmap flip b
-        flip SQEmpty = SQEmpty
-        flip SQBlack = SQWhite
-        flip SQWhite = SQBlack
+        flipBoardIfWhite SQBlack b1 = b1
+        flipBoardIfWhite _ b1 = fmap flipSq b1
+        flipSq SQEmpty = SQEmpty
+        flipSq SQBlack = SQWhite
+        flipSq SQWhite = SQBlack
 
 --selectMoveRandomly [] _ = Left "error: no move selected. rand > 1 or move probs don't add to 1"
 selectMoveRandomly :: [(Float,Loc)] -> Float -> Int -> (Loc,Int)
@@ -197,19 +200,19 @@ showMcts :: Mcts -> String
 showMcts mcts = (showBoard (board mcts)) Prelude.++ (show (player mcts)) Prelude.++ (show (moves mcts)) Prelude.++ (show (won mcts))
 
 initialMcts :: Board -> Square -> Square -> Mcts
-initialMcts b p won = MkMcts b p () 0 0 won [initialMcts b' nextPlayer w' | (b',w') <- boardsWins]
+initialMcts b p w = MkMcts b p () 0 0 w [initialMcts b' nextPlayer w' | (b',w') <- boardsWins]
     where 
-        vmoves = moves (MkMcts b p () 0 0 won [])
+        vmoves = moves (MkMcts b p () 0 0 w [])
         nextPlayer = if p == SQWhite then SQBlack else SQWhite
         boardsLocs :: [(Board,Loc)]
         boardsLocs = [(b // [(i,nextPlayer)],i) | i  <- vmoves]
         boardsWins :: [(Board,Square)]
-        boardsWins = [(b1,thisWins won b1 l1 vmoves) | (b1,l1) <- boardsLocs]
+        boardsWins = [(b1,thisWins w b1 l1 vmoves) | (b1,l1) <- boardsLocs]
 
 --if no moves available then winner is player 
 autoPlayRollout :: Mcts -> RandFloats -> HaxlId Square
-autoPlayRollout mcts@(MkMcts _ _ _ _ _ SQBlack _) _ = pure SQBlack
-autoPlayRollout mcts@(MkMcts _ _ _ _ _ SQWhite _) _ = pure SQWhite
+autoPlayRollout (MkMcts _ _ _ _ _ SQBlack _) _ = pure SQBlack
+autoPlayRollout (MkMcts _ _ _ _ _ SQWhite _) _ = pure SQWhite
 autoPlayRollout mcts@(MkMcts b p _ _ _ w _) (r:rs) = do 
     mps <- getMoveProbabilities b p ls
     let (_,idx) = selectMoveRandomly mps r 0 
@@ -237,10 +240,10 @@ selectTopRandomly :: [Mcts] -> Int -> Float -> ([Mcts],Mcts,[Mcts])
 selectTopRandomly mctss totalPlays r = selectIt [] mctss r
     where
         scores = [ucb1 m totalPlays | m <- mctss]
-        maxcnt xs = (max,len)
+        maxcnt xs = (max1,len)
             where 
-                len = Prelude.length [i | i <- xs, max == i]
-                max = Prelude.maximum xs
+                len = Prelude.length [i | i <- xs, max1 == i]
+                max1 = Prelude.maximum xs
         (maxScore,cnt) = maxcnt scores
 
         selectIt :: [Mcts] ->  [Mcts] -> Float -> ([Mcts],Mcts,[Mcts])
@@ -256,7 +259,7 @@ selectTopRandomly mctss totalPlays r = selectIt [] mctss r
             
 
 oneMctsUpdate :: Mcts -> Int -> RandFloats -> HaxlId (Mcts,Square)
-oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _) totalPlays (r:rs) = do 
+oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _) _ (_:rs) = do 
     winner <- hwinner
     let numWins = if winner == (player mcts) then 1 else 0  
     pure (mcts {plays = 1,wins = numWins},winner)
@@ -276,7 +279,7 @@ oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _) totalPlays (r:rs) = do
         --select/expand
         (leftRev,randTop,right) = selectTopRandomly (children mcts) totalPlays r
         left = Prelude.reverse leftRev
-oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) totalPlays (r:rs) = do
+oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) _ _ = do
     pure (ret,winner)
     where  
         newPlays = (plays mcts) + 1
@@ -300,11 +303,8 @@ mctsUpdates mcts cnt (i:is) = do
 selectTopMoveDet :: Mcts -> Mcts
 selectTopMoveDet mcts = mcts'
     where 
-          p = if (player mcts) == SQBlack then SQWhite else SQBlack
           mostPlays = Prelude.maximum [plays m | m <- children mcts]
           mcts' = Prelude.head [m | m <- children mcts, plays m == mostPlays]
-          b = board mcts'
-          w = won mcts'
 
     
 
@@ -316,7 +316,7 @@ selfPlay mcts@(MkMcts _ _ _ _ _ SQEmpty _) cnt (r:rs) = do
     let mcts'  = selectTopMoveDet mctsUpdate
     let mcts'' = initialMcts (board mcts') (player mcts') (won mcts') -- memory savings
     selfPlay mcts'' cnt rs
-selfPlay mcts cnt rs =  pure mcts
+selfPlay mcts _ _ =  pure mcts
 
 selfPlays :: [Mcts] -> Int -> RandInts -> HaxlId [Mcts]
 selfPlays mctss cnt rs = Control.Monad.mapM play (Data.List.zip mctss rs)

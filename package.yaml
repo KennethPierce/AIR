@@ -25,7 +25,9 @@ dependencies:
 library:
   source-dirs: src
   ghc-options:
-  - -Wall
+  - -Wall 
+  - -Wno-unused-binds 
+  - -Wno-unused-imports
   dependencies:
   - vector
   - vector-instances
@@ -46,6 +48,8 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     - -Wall
+    - -Wno-unused-binds 
+    - -Wno-unused-imports
 
     dependencies:
     - mctsGames
@@ -63,6 +67,8 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     - -Wall
+    - -Wno-unused-binds  
+    - -Wno-unused-imports
 
     dependencies:
     - mctsGames

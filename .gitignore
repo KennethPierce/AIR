@@ -17,5 +17,6 @@ cabal.sandbox.config
 *.eventlog
 .stack-work/
 .stack-work/
+ghcid.txt
 *~
 mctsGames.cabal
