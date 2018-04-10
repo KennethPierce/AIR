@@ -6,4 +6,4 @@ import Lib
 
 
 main :: IO ()
-main = selfPlaysIO 100 100
+main = selfPlaysIO 1000 50
