@@ -14,3 +14,7 @@ more *.prof
 stack exec *.exe +RTS -h -l -L64
 stack exec -- hp2ps -c *.hp
 gv *.ps
+
+###profiling threads
+*.exe +RTS -l
+threadscope.linux *.eventlog

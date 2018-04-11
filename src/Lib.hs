@@ -8,6 +8,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ApplicativeDo #-}
 --{-# LANGUAGE DeriveAnyClass #-}
 
 
@@ -27,6 +28,8 @@ import qualified Data.List
 import qualified Data.Hashable -- for haxl
 import qualified Data.Typeable -- for haxl
 import qualified Haxl.Core --for batching call to TF inferences
+import qualified Haxl.Prelude
+import qualified Data.Set as Set
 --import qualified Data.ByteString as BS
 
 boardSize :: Int
@@ -51,7 +54,7 @@ type Loc = Int
 type RandInts = [Int]
 type RandFloats = [Float]
 type History = [Int]
-
+type Moves = Set.Set Int
 
 type HaxlId = Haxl.Core.GenHaxl ()
 runHaxlId :: HaxlId a -> IO (a)
@@ -100,7 +103,7 @@ instance Haxl.Core.DataSource u TensorFlowReq where
                 --putStrLn (showBoard (Data.List.head _b))
                 --putStrLn ("Batched call " Data.List.++ (show (Data.List.length resultVarInferences)))
                 let results = [(vectOne,0) | _ <- ([0..] :: [Int])  ] 
-                Control.Monad.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
+                Haxl.Prelude.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
         Control.Monad.unless (Data.List.null resultVarInferences) batchGetInference
 
 emptyBoard :: Board 
@@ -172,7 +175,8 @@ showBoard b = unlines ls
 -- Needs to fix invalid move probabilities            
 getMoveProbabilities :: Board -> Square -> [Loc] -> HaxlId [(Float,Loc)]
 getMoveProbabilities b sq ls = do 
-    (probs,_) <- getInference b'
+    (probs,_score) <- getInference b'
+    --let probs = vectOne
     let validMoves = [probs V.! i | i <- ls]
     let sumVal = Prelude.sum validMoves
     let probs' = [i / sumVal | i <- validMoves]
@@ -195,15 +199,22 @@ selectMoveRandomly ((f,l):mps) rand idx =
 
 
 
-moves :: Mcts -> [Loc]
-moves mcts = [i | i <- [0..(boardSize*boardSize-1)], b `boardIndex` i == SQEmpty ] 
-    where 
-        b = board mcts
+movesOnBoard :: Board -> [Loc]
+movesOnBoard b = [i | i <- [0..(boardSize*boardSize-1)], b `boardIndex` i == SQEmpty ] 
+
+moves :: Mcts -> [Int]
+moves mcts = Control.Exception.assert b m
+    where
+        b = if m == mob then True else Debug.Trace.trace tracemsg False
+        tracemsg = show m ++ show mob
+        m = Set.toList (moves_ mcts)
+        mob = movesOnBoard (board mcts)
+
 
 data Mcts = MkMcts 
     {board :: Board
     ,player :: Square
-    ,moves_:: ()
+    ,moves_:: Moves
     ,wins :: Int
     ,plays :: Int
     ,won :: Square
@@ -214,25 +225,29 @@ showMcts :: Mcts -> String
 showMcts mcts = (showBoard (board mcts)) Prelude.++ (show (player mcts)) Prelude.++ (show (moves mcts)) Prelude.++ (show (won mcts))
 
 initialMcts :: Board -> Square -> Square -> Mcts
-initialMcts b p w = MkMcts b p () 0 0 w [initialMcts b' nextPlayer w' | (b',w') <- boardsWins]
+initialMcts b p w = initialMctsMoves b p m w
+    where
+        m = Set.fromList (movesOnBoard b)
+
+initialMctsMoves b p m w = MkMcts b p m 0 0 w [initialMctsMoves b' p' m' w' | (b',m',w') <- boardsWins]
     where 
-        vmoves = moves (MkMcts b p () 0 0 w [])
-        nextPlayer = if p == SQWhite then SQBlack else SQWhite
+        vmoves = Set.toList m
+        p' = if p == SQWhite then SQBlack else SQWhite
         boardsLocs :: [(Board,Loc)]
-        boardsLocs = [(b `boardSet` [(i,nextPlayer)],i) | i  <- vmoves]
-        boardsWins :: [(Board,Square)]
-        boardsWins = [(b1,thisWins w b1 l1 vmoves) | (b1,l1) <- boardsLocs]
+        boardsLocs = [(b `boardSet` [(i,p')],i) | i  <- vmoves]
+        boardsWins :: [(Board,Moves,Square)]
+        boardsWins = [(b1,Set.delete l1 m,thisWins w b1 l1 vmoves) | (b1,l1) <- boardsLocs]
 
 --if no moves available then winner is player 
 autoPlayRollout :: Mcts -> RandFloats -> HaxlId Square
 autoPlayRollout (MkMcts _ _ _ _ _ SQBlack _) _ = pure SQBlack
 autoPlayRollout (MkMcts _ _ _ _ _ SQWhite _) _ = pure SQWhite
-autoPlayRollout mcts@(MkMcts b p _ _ _ w _) (r:rs) = do 
+autoPlayRollout mcts@(MkMcts b p m _ _ w c) (r:rs) = do 
     mps <- getMoveProbabilities b p ls
     let (l,_idx) = selectMoveRandomly mps r 0 
     let b' = Control.Exception.assert (b `boardIndex` l == SQEmpty) (b `boardSet` [(l,nextPlayer)])
     let newWin = thisWins w b' l ls
-    let mcts' = MkMcts b' nextPlayer () 0 0 newWin []
+    let mcts' = MkMcts b' nextPlayer (Set.delete l m) 0 0 newWin []
     autoPlayRollout mcts' rs 
     where
         ls = moves mcts
@@ -330,12 +345,11 @@ selfPlay mcts@(MkMcts _ _ _ _ _ SQEmpty _) cnt (r:rs) = do
     let rs' = randoms g
     mctsUpdate <- mctsUpdates mcts cnt rs'
     let mcts'  = selectTopMoveDet mctsUpdate
-    let mcts'' = initialMcts (board mcts') (player mcts') (won mcts') -- memory savings
-    selfPlay mcts'' cnt rs
+    selfPlay mcts' cnt rs
 selfPlay mcts _ _ =  pure mcts
 
 selfPlays :: [Mcts] -> Int -> RandInts -> HaxlId [Mcts]
-selfPlays mctss cnt rs = Control.Monad.mapM play (Data.List.zip mctss rs)
+selfPlays mctss cnt rs = Haxl.Prelude.mapM play (Data.List.zip mctss rs)
     where
         play (mcts,r) = selfPlay mcts cnt rs'
             where 
