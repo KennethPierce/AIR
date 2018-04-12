@@ -21,7 +21,7 @@ import System.Random
 import qualified Control.Exception 
 import qualified Debug.Trace
 
-import qualified Data.Traversable 
+--import qualified Data.Traversable 
 --import qualified Data.MessagePack
 import qualified Control.Monad
 import qualified Data.List
@@ -135,14 +135,22 @@ boardSet (bb,bw) ((i,SQWhite):us) = boardSet (bb,bw V.// [(i,True)]) us
 boardSet (bb,bw) ((i,SQEmpty):us) = boardSet (bb V.// [(i,False)],bw V.// [(i,False)]) us
 
 countDir :: Board -> Int -> Loc1 -> Loc1 -> Int
-countDir b cnt (x,y) (x',y') =
-    if valid (x+x',y+y') && boardValueL b (x,y) == boardValueL b (x+x',y+y') 
-    then countDir b (cnt+1) (x+x',y+y') (x',y')
+countDir b@(bb,bw) cnt (x,y) (xd,yd) =
+    if valid (x',y') && sameValue 
+    then countDir b (cnt+1) (x',y') (xd,yd)
     else cnt
         where 
+            (x',y') = (x+xd,y+yd)
             valid (-1,_) = False                                     
             valid (_,-1) = False
-            valid (a1,b1) = not ( a1 == boardSize || b1 == boardSize)
+            valid (a1,b1) = not ( a1    == boardSize || b1 == boardSize)
+
+            idx1 = x* boardSize+y 
+            idx2 = x'*boardSize+y'
+            bSq = if bb V.! idx1 then bb else bw
+            sameValue = bSq V.! idx2
+
+             
 -- | does player win after moving to location 
 isWinner :: Board -> Loc -> Bool
 isWinner b l = Prelude.any (>=winLength) ls
@@ -173,17 +181,19 @@ showBoard b = unlines ls
 
 
 -- Needs to fix invalid move probabilities            
-getMoveProbabilities :: Board -> Square -> [Loc] -> HaxlId [(Float,Loc)]
-getMoveProbabilities b sq ls = do 
+getMoveProbabilities :: Board -> Square -> Moves -> HaxlId (V.Vector (Float,Loc))
+getMoveProbabilities b sq m = do 
     (probs,_score) <- getInference b'
     --let probs = vectOne
-    let validMoves = [probs V.! i | i <- ls]
-    let sumVal = Prelude.sum validMoves
-    let probs' = [i / sumVal | i <- validMoves]
-    pure (Data.List.zip probs' ls)
+    let !validMoves = V.backpermute  probs vm
+    let sumVal = V.sum validMoves
+    let !z = V.zipWith (\a1 b1 -> (a1/sumVal,b1)) validMoves vm
+    pure z 
     where 
         --Alway send board as if player Black moves next.
         --Minimize learning time.
+        mcnt= Set.size m
+        vm = V.fromListN mcnt (Set.toList m)
         b' = flipBoardIfWhite sq b
         flipBoardIfWhite SQBlack b1 = b1
         flipBoardIfWhite _ (bb,bw) = (bw,bb)
@@ -212,12 +222,12 @@ moves mcts = Control.Exception.assert b m
 
 
 data Mcts = MkMcts 
-    {board :: Board
-    ,player :: Square
-    ,moves_:: Moves
-    ,wins :: Int
-    ,plays :: Int
-    ,won :: Square
+    {board :: !Board
+    ,player :: !Square
+    ,moves_:: !Moves
+    ,wins :: !Int
+    ,plays :: !Int
+    ,won :: !Square
     ,children :: [Mcts]
     } 
 
@@ -229,6 +239,7 @@ initialMcts b p w = initialMctsMoves b p m w
     where
         m = Set.fromList (movesOnBoard b)
 
+initialMctsMoves :: Board -> Square -> Moves -> Square -> Mcts
 initialMctsMoves b p m w = MkMcts b p m 0 0 w [initialMctsMoves b' p' m' w' | (b',m',w') <- boardsWins]
     where 
         vmoves = Set.toList m
@@ -242,9 +253,9 @@ initialMctsMoves b p m w = MkMcts b p m 0 0 w [initialMctsMoves b' p' m' w' | (b
 autoPlayRollout :: Mcts -> RandFloats -> HaxlId Square
 autoPlayRollout (MkMcts _ _ _ _ _ SQBlack _) _ = pure SQBlack
 autoPlayRollout (MkMcts _ _ _ _ _ SQWhite _) _ = pure SQWhite
-autoPlayRollout mcts@(MkMcts b p m _ _ w c) (r:rs) = do 
-    mps <- getMoveProbabilities b p ls
-    let (l,_idx) = selectMoveRandomly mps r 0 
+autoPlayRollout mcts@(MkMcts b p m _ _ w _) (r:rs) = do 
+    mps <- getMoveProbabilities b p m
+    let (l,_idx) = selectMoveRandomly (V.toList mps) r 0 
     let b' = Control.Exception.assert (b `boardIndex` l == SQEmpty) (b `boardSet` [(l,nextPlayer)])
     let newWin = thisWins w b' l ls
     let mcts' = MkMcts b' nextPlayer (Set.delete l m) 0 0 newWin []
@@ -319,7 +330,7 @@ oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) _ _ = do
 
 
 mctsUpdates :: Mcts -> Int -> RandInts ->  HaxlId Mcts
-mctsUpdates mcts 0 _ = Debug.Trace.trace tracemsg (pure mcts)
+mctsUpdates mcts 0 _ =  Debug.Trace.trace tracemsg (pure mcts)
     where 
         tracemsg = " moveCnt="++show (length (moves mcts))
 mctsUpdates mcts cnt (i:is) = do
@@ -361,8 +372,9 @@ selfPlaysIO num cnt = do
     g <- newStdGen
     let rs = randoms g
     let mctss = Data.List.replicate num mctsInitBoard
-    mctss' <- runHaxlId (selfPlays mctss cnt rs)
-    _ <- Data.Traversable.for mctss' (\mcts -> putStrLn (showBoard (board mcts)))
+    let splay = selfPlays mctss cnt rs
+    mctss' <- runHaxlId splay
+    _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
     pure ()
 
 mctsInitBoard :: Mcts
