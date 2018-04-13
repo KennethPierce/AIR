@@ -51,10 +51,8 @@ executables:
 
     dependencies:
     - mctsGames
-    - haxl
     - text
-    - hashable
-    - random
+    - cmdargs
 
 tests:
   mctsGames-test:
