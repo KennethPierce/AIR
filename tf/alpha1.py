@@ -12,6 +12,10 @@ import numpy as np
 headScoreName = "headScore"
 headProbsName = "headProbs"
 inferName = "inferName"
+scoreTargetName = "scoreTarget"
+probsTargetName = "probsTarget"
+costName = "costName"
+optimizerName = "optimizerName"
 isTrainingName = "isTrainingBool"
 # 1x9x9x2 binary image input
 isTrainingVar=None
@@ -31,7 +35,8 @@ def residual(nnInput):
     
 def headMove(nnInput,cntProbs):
     l = layer(nnInput,2,1)
-    logits = tf.contrib.layers.fully_connected(l,cntProbs)
+    f = tf.contrib.layers.flatten(l)
+    logits = tf.contrib.layers.fully_connected(f,cntProbs)
     probs = tf.nn.softmax(logits,name=headProbsName)
     return probs
 
@@ -41,6 +46,15 @@ def headScore(nnInput,cntProbs):
     rawScore = tf.contrib.layers.fully_connected(l,1)    
     score = tf.nn.tanh(rawScore,name=headScoreName)
     return score
+
+def headCost(score,probs,scoreTarget,probsTarget,rweight):
+    s = tf.pow(score-scoreTarget,2) 
+    p = probsTarget*tf.log(probs)     
+    #TODO add regularizer L2 wieights
+#    tv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+#    print ("weights: ",tv)
+#    r = tf.contrib.layers.apply_regularization(tv,tf.contrib.layers.l2_regularizer(scale=rweight))
+    return tf.add(s,p,name=costName)
 
 def createModel(args):
     tf.reset_default_graph()
@@ -54,6 +68,9 @@ def createModel(args):
         res = residual(res)
     score = headScore(res,args.probs)
     probs = headMove(res,args.probs)
+    scoreTarget = tf.placeholder(tf.float32,(None,1),name=scoreTargetName)
+    probsTarget = tf.placeholder(tf.float32,(None,args.rows*args.columns),name=probsTargetName)
+    cost = headCost(score,probs,scoreTarget,probsTarget,args.rweight)
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
     saver = tf.train.Saver()
@@ -67,7 +84,7 @@ def load(args):
     saver.restore(sess,args.model)
     return sess,saver
     
-def infer(args,tIn):
+def infer(args,inferFeed):
     sess,saver = load(args)
     graph = tf.get_default_graph()
     x = graph.get_tensor_by_name(inferName+":0")
@@ -75,7 +92,7 @@ def infer(args,tIn):
     sess.run(tf.assign(isTrainingVar,False))
     headScore = graph.get_tensor_by_name(headScoreName+":0")    
     headProbs = graph.get_tensor_by_name(headProbsName+":0")  
-    result = sess.run([headScore,headProbs],feed_dict={x:tIn})
+    result = sess.run([headScore,headProbs],feed_dict={x:inferFeed})
     print (result)
 
 def testInfer(args):
@@ -83,12 +100,41 @@ def testInfer(args):
 #    tIn = tf.constant(r,shape=r.shape)
     infer(args,r)
 
-def testTrain(args):
+def train(args,trainFeed):
     sess,saver = load(args)    
     graph = tf.get_default_graph()
+
+    iFeed = (graph.get_tensor_by_name(inferName+":0")
+          , graph.get_tensor_by_name(scoreTargetName+":0")
+          , graph.get_tensor_by_name(probsTargetName+":0"))
+
+    batch_size = 32
+    dataset = tf.data.Dataset.from_tensor_slices(iFeed).batch(batch_size).repeat()
+    iter = dataset.make_initializable_iterator()
+    n_batches = trainFeed[0].shape[0] // batch_size    
+    
     isTrainingVar = graph.get_tensor_by_name(isTrainingName+":0")    
     sess.run(tf.assign(isTrainingVar,True))
+    cost = graph.get_tensor_by_name(costName+":0")    
     
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)       
+    with tf.control_dependencies(update_ops):
+        optimizer = tf.train.GradientDescentOptimizer(args.lr).minimize(cost,name=optimizerName)
+#    sess.run(iter.initializer, feed_dict=dict(zip(iFeed,trainFeed)))                
+    print ("training...")
+    for i in range(10): # epochs
+        for _ in range (n_batches): 
+            _,lv = sess.run([optimizer,cost],feed_dict=dict(zip(iFeed,trainFeed)))
+        print ("epoch ",i, " ", np.mean(lv))
+        
+def testTrain(args):
+    bs = 100
+    boards = np.random.rand(bs,7,7,2).astype(np.float32)
+    scores = np.random.rand(bs,1).astype(np.float32)
+    scores = np.vectorize(lambda x : -1 if (x < 0.5) else 1)(scores)
+    probs = np.eye(49)[np.random.choice(49, bs)]
+    train(args,(boards,scores,probs))
+    pass    
 
 def cmdParser():
     modelPath =     "./model/a1Model"
@@ -111,11 +157,13 @@ python alpha1.py debug
     subCreate.add_argument('-rows',type=int,default=7,help="input rows")
     subCreate.add_argument('-columns',type=int,default=7,help="input columns")
     subCreate.add_argument('-probs',type=int,default=49,help="output probability count")
+    subCreate.add_argument('-rweight',type=float,default=0.1,help="output probability count")
     subCreate.add_argument('-model',default=modelPath,help="output Model dir")
     subInfer = subParsers.add_parser('infer',help='infer -h')
     subInfer.add_argument('-model',default=modelPath,help="input Model dir")
     subTrain = subParsers.add_parser('train',help='train -h')
     subTrain.add_argument('-model',default=modelPath,help="input & output Model dir")
+    subTrain.add_argument('-lr',type=float,default=0.00001,help="learning rate")
     return parserMode
             
 def main():
@@ -126,6 +174,8 @@ def main():
         createModel(args)
     elif args.mode == 'infer' :
         testInfer(args)
+    elif args.mode == 'train' :
+        testTrain(args)
 main()    
     
     
