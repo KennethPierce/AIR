@@ -8,6 +8,8 @@ import argparse
 import sys
 import tensorflow as tf
 import numpy as np
+import msgpack 
+
 #constants
 headScoreName = "headScore"
 headProbsName = "headProbs"
@@ -50,11 +52,13 @@ def headScore(nnInput,cntProbs):
 def headCost(score,probs,scoreTarget,probsTarget,rweight):
     s = tf.pow(score-scoreTarget,2) 
     p = probsTarget*tf.log(probs)     
-    #TODO add regularizer L2 wieights
-#    tv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-#    print ("weights: ",tv)
-#    r = tf.contrib.layers.apply_regularization(tv,tf.contrib.layers.l2_regularizer(scale=rweight))
-    return tf.add(s,p,name=costName)
+    
+    tv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    print ("weights: ",tv)
+    l2s = [tf.nn.l2_loss(i) for i in tv]
+    r=tf.add_n(l2s)
+    r = r **(0.5)
+    return tf.add(s,p+r,name=costName)
 
 def createModel(args):
     tf.reset_default_graph()
@@ -100,7 +104,7 @@ def testInfer(args):
 #    tIn = tf.constant(r,shape=r.shape)
     infer(args,r)
 
-def train(args,trainFeed):
+def trainOnData(args,trainFeed):
     sess,saver = load(args)    
     graph = tf.get_default_graph()
 
@@ -108,9 +112,9 @@ def train(args,trainFeed):
           , graph.get_tensor_by_name(scoreTargetName+":0")
           , graph.get_tensor_by_name(probsTargetName+":0"))
 
-    batch_size = 32
-    dataset = tf.data.Dataset.from_tensor_slices(iFeed).batch(batch_size).repeat()
-    iter = dataset.make_initializable_iterator()
+    batch_size = 1024
+    dataset = tf.data.Dataset.from_tensor_slices(trainFeed).shuffle(20000).batch(batch_size).repeat()
+    iter = dataset.make_one_shot_iterator()
     n_batches = trainFeed[0].shape[0] // batch_size    
     
     isTrainingVar = graph.get_tensor_by_name(isTrainingName+":0")    
@@ -120,12 +124,34 @@ def train(args,trainFeed):
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)       
     with tf.control_dependencies(update_ops):
         optimizer = tf.train.GradientDescentOptimizer(args.lr).minimize(cost,name=optimizerName)
-#    sess.run(iter.initializer, feed_dict=dict(zip(iFeed,trainFeed)))                
+    nextElement = iter.get_next()        
+    #sess.run(iter.initializer, feed_dict=dict(zip(iFeed,trainFeed)))                
     print ("training...")
     for i in range(10): # epochs
-        for _ in range (n_batches): 
-            _,lv = sess.run([optimizer,cost],feed_dict=dict(zip(iFeed,trainFeed)))
+        for j in range (n_batches): 
+            batch = sess.run(nextElement)
+            fd = dict(zip(iFeed,batch))
+            _,lv = sess.run([optimizer,cost],feed_dict=fd)
+            print (i," ",j,"/",n_batches," ",np.mean(lv))
         print ("epoch ",i, " ", np.mean(lv))
+
+def train(args):
+    with open(args.datafile,"rb") as f:
+        (boards,scores,moves) = msgpack.unpack(f)  
+    sl = len(scores)
+    s = np.array([float(i) for i in scores]).astype(np.float32).reshape(sl,1)
+    ml = len(moves)
+    assert (sl == ml)
+    p = np.zeros((ml,49))    
+    p[np.arange(ml),moves]=1
+    def mkT(bl,wh):
+        t1 = np.array(bl).astype(np.float32).reshape(1,7,7,1)
+        t2 = np.array(wh).astype(np.float32).reshape(1,7,7,1)
+        ret = np.concatenate([t1,t2],axis=3)
+        assert (ret.shape == (1,7,7,2))
+        return ret
+    b = np.concatenate([mkT(bl,wh) for bl,wh in boards],axis=0)
+    trainOnData(args,(b,s,p))    
         
 def testTrain(args):
     bs = 100
@@ -133,12 +159,12 @@ def testTrain(args):
     scores = np.random.rand(bs,1).astype(np.float32)
     scores = np.vectorize(lambda x : -1 if (x < 0.5) else 1)(scores)
     probs = np.eye(49)[np.random.choice(49, bs)]
-    train(args,(boards,scores,probs))
+    trainOnData(args,(boards,scores,probs))
     pass    
 
 def cmdParser():
     modelPath =     "./model/a1Model"
-    
+    datafile = "mctsTrainBII.mp"
     usageExample = '''
 example:    
 python alpha1.py create 
@@ -163,6 +189,7 @@ python alpha1.py debug
     subInfer.add_argument('-model',default=modelPath,help="input Model dir")
     subTrain = subParsers.add_parser('train',help='train -h')
     subTrain.add_argument('-model',default=modelPath,help="input & output Model dir")
+    subTrain.add_argument('-datafile',default=datafile,help="input msgpack file")
     subTrain.add_argument('-lr',type=float,default=0.00001,help="learning rate")
     return parserMode
             
@@ -175,7 +202,7 @@ def main():
     elif args.mode == 'infer' :
         testInfer(args)
     elif args.mode == 'train' :
-        testTrain(args)
+        train(args)
 main()    
     
     

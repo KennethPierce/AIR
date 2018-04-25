@@ -21,8 +21,9 @@ import System.Random
 import qualified Control.Exception 
 import qualified Debug.Trace
 
---import qualified Data.Traversable 
---import qualified Data.MessagePack
+
+import qualified Data.MessagePack as MP
+import qualified Data.ByteString.Lazy as BL
 import qualified Control.Monad
 import qualified Data.List
 import qualified Data.Hashable -- for haxl
@@ -105,6 +106,10 @@ instance Haxl.Core.DataSource u TensorFlowReq where
                 let results = [(vectOne,0) | _ <- ([0..] :: [Int])  ] 
                 Haxl.Prelude.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
         Control.Monad.unless (Data.List.null resultVarInferences) batchGetInference
+
+
+
+
 
 emptyBoard :: Board 
 emptyBoard = (V.replicate (boardSize*boardSize) False,V.replicate (boardSize*boardSize) False)
@@ -229,36 +234,37 @@ data Mcts = MkMcts
     ,plays :: !Int
     ,won :: !Square
     ,children :: [Mcts]
+    ,history :: History
     } 
 
 showMcts :: Mcts -> String
 showMcts mcts = (showBoard (board mcts)) Prelude.++ (show (player mcts)) Prelude.++ (show (moves mcts)) Prelude.++ (show (won mcts))
 
-initialMcts :: Board -> Square -> Square -> Mcts
-initialMcts b p w = initialMctsMoves b p m w
+initialMcts :: Board -> Square -> Square -> History -> Mcts
+initialMcts b p w h = initialMctsMoves b p m w h
     where
         m = Set.fromList (movesOnBoard b)
 
-initialMctsMoves :: Board -> Square -> Moves -> Square -> Mcts
-initialMctsMoves b p m w = MkMcts b p m 0 0 w [initialMctsMoves b' p' m' w' | (b',m',w') <- boardsWins]
+initialMctsMoves :: Board -> Square -> Moves -> Square -> History -> Mcts
+initialMctsMoves b p m w h = MkMcts b p m 0 0 w [initialMctsMoves b' p' m' w' (h':h) | (b',m',w',h') <- boardsWins] h
     where 
         vmoves = Set.toList m
         p' = if p == SQWhite then SQBlack else SQWhite
         boardsLocs :: [(Board,Loc)]
         boardsLocs = [(b `boardSet` [(i,p')],i) | i  <- vmoves]
-        boardsWins :: [(Board,Moves,Square)]
-        boardsWins = [(b1,Set.delete l1 m,thisWins w b1 l1 vmoves) | (b1,l1) <- boardsLocs]
+        boardsWins :: [(Board,Moves,Square,Int)]
+        boardsWins = [(b1,Set.delete l1 m,thisWins w b1 l1 vmoves,l1) | (b1,l1) <- boardsLocs]
 
 --if no moves available then winner is player 
 autoPlayRollout :: Mcts -> RandFloats -> HaxlId Square
-autoPlayRollout (MkMcts _ _ _ _ _ SQBlack _) _ = pure SQBlack
-autoPlayRollout (MkMcts _ _ _ _ _ SQWhite _) _ = pure SQWhite
-autoPlayRollout mcts@(MkMcts b p m _ _ w _) (r:rs) = do 
+autoPlayRollout (MkMcts _ _ _ _ _ SQBlack _ _) _ = pure SQBlack
+autoPlayRollout (MkMcts _ _ _ _ _ SQWhite _ _) _ = pure SQWhite
+autoPlayRollout mcts@(MkMcts b p m _ _ w _ _) (r:rs) = do 
     mps <- getMoveProbabilities b p m
     let (l,_idx) = selectMoveRandomly (V.toList mps) r 0 
     let b' = Control.Exception.assert (b `boardIndex` l == SQEmpty) (b `boardSet` [(l,nextPlayer)])
     let newWin = thisWins w b' l ls
-    let mcts' = MkMcts b' nextPlayer (Set.delete l m) 0 0 newWin []
+    let mcts' = MkMcts b' nextPlayer (Set.delete l m) 0 0 newWin [] []
     autoPlayRollout mcts' rs 
     where
         ls = moves mcts
@@ -299,14 +305,14 @@ selectTopRandomly mctss totalPlays r = selectIt [] mctss r
             
 
 oneMctsUpdate :: Mcts -> Int -> RandFloats -> HaxlId (Mcts,Square)
-oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _) _ (_:rs) = do 
+oneMctsUpdate mcts@(MkMcts _ _ _ _ 0 gameWon _ _) _ (_:rs) = do 
     winner <- hwinner
     let numWins = if winner == (player mcts) then 1 else 0  
     pure (mcts {plays = 1,wins = numWins},winner)
     where
         --rollout (playout)
         hwinner = if gameWon == SQEmpty then autoPlayRollout mcts rs else pure gameWon
-oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _) totalPlays (r:rs) = do 
+oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _ _) totalPlays (r:rs) = do 
     (mctsNew,winnerSq) <- oneMctsUpdate randTop totalPlays rs
     let     
         newChildren = left Prelude.++ (mctsNew:right)
@@ -319,7 +325,7 @@ oneMctsUpdate mcts@(MkMcts _ _ _ _ _ SQEmpty _) totalPlays (r:rs) = do
         --select/expand
         (leftRev,randTop,right) = selectTopRandomly (children mcts) totalPlays r
         left = Prelude.reverse leftRev
-oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _) _ _ = do
+oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _ _) _ _ = do
     pure (ret,winner)
     where  
         newPlays = (plays mcts) + 1
@@ -351,7 +357,7 @@ selectTopMoveDet mcts = mcts'
     
 
 selfPlay :: Mcts -> Int -> RandInts -> HaxlId Mcts
-selfPlay mcts@(MkMcts _ _ _ _ _ SQEmpty _) cnt (r:rs) = do 
+selfPlay mcts@(MkMcts _ _ _ _ _ SQEmpty _ _) cnt (r:rs) = do 
     let g = mkStdGen r
     let rs' = randoms g
     mctsUpdate <- mctsUpdates mcts cnt rs'
@@ -375,10 +381,30 @@ selfPlaysIO num cnt = do
     let splay = selfPlays mctss cnt rs
     mctss' <- runHaxlId splay
     _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
+    let trainData = msgPackTrainData mctss'
+    BL.writeFile "mctsTrainBII.mp" $ MP.pack trainData
     pure ()
 
+type TrainData = [(Board,Int,Int)]
+
+msgPackTrainData :: [Mcts] -> ([Board],[Int],[Int])
+msgPackTrainData mctss = unzip3 (foldr trainData [] mctss)
+    where
+        trainData :: Mcts -> TrainData -> TrainData
+        trainData mcts td = recreate emptyBoard SQBlack hist
+            where
+                hist = reverse (history mcts)
+                winnerScore = if (won mcts) == SQBlack then 1 else -1
+                -- only write winner board, only write as black board
+                recreate :: Board -> Square -> History -> TrainData
+                recreate _ _ [] = td
+                recreate b pl (h:hs) = (b,winnerScore,h):(recreate newBoard np hs)
+                    where 
+                        newBoard = boardSet b [(h,pl)]
+                        np = if (player mcts) == SQBlack then SQWhite else SQBlack
+
 mctsInitBoard :: Mcts
-mctsInitBoard = initialMcts (emptyBoard) SQBlack SQEmpty
+mctsInitBoard = initialMcts emptyBoard SQBlack SQEmpty [] 
 
 testWinner :: IO ()
 testWinner = do
