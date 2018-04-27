@@ -17,6 +17,9 @@ inferName = "inferName"
 scoreTargetName = "scoreTarget"
 probsTargetName = "probsTarget"
 costName = "costName"
+costRegName = "costRegName"
+costProbName = "costProbName"
+costScoreName = "costScoreName"
 optimizerName = "optimizerName"
 isTrainingName = "isTrainingBool"
 # 1x9x9x2 binary image input
@@ -30,9 +33,9 @@ def layer (nnInput,chan,stride,skipInput=None):
     r = tf.nn.relu(n)
     return r
 
-def residual(nnInput):
-    l = layer(nnInput,4,3)
-    r = layer(l,4,3,nnInput,)
+def residual(nnInput,chan):
+    l = layer(nnInput,chan,3)
+    r = layer(l,chan,3,nnInput,)
     return r
     
 def headMove(nnInput,cntProbs):
@@ -51,13 +54,16 @@ def headScore(nnInput,cntProbs):
 
 def headCost(score,probs,scoreTarget,probsTarget,rweight):
     s = tf.pow(score-scoreTarget,2) 
-    p = probsTarget*tf.log(probs)     
-    
+    s = tf.add(s,0,name=costScoreName)
+    p = 0-probsTarget*tf.log(probs)     
+    p = tf.add(p,0,name=costProbName)
     tv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
     print ("weights: ",tv)
     l2s = [tf.nn.l2_loss(i) for i in tv]
     r=tf.add_n(l2s)
     r = r **(0.5)
+    r = r * rweight
+    r = tf.add(r,0,name=costRegName)
     return tf.add(s,p+r,name=costName)
 
 def createModel(args):
@@ -69,7 +75,7 @@ def createModel(args):
     initial = layer(x_pl,args.filters,3)
     res=initial
     for i in range(args.residuals):   
-        res = residual(res)
+        res = residual(res,args.filters)
     score = headScore(res,args.probs)
     probs = headMove(res,args.probs)
     scoreTarget = tf.placeholder(tf.float32,(None,1),name=scoreTargetName)
@@ -120,6 +126,9 @@ def trainOnData(args,trainFeed):
     isTrainingVar = graph.get_tensor_by_name(isTrainingName+":0")    
     sess.run(tf.assign(isTrainingVar,True))
     cost = graph.get_tensor_by_name(costName+":0")    
+    costScore = graph.get_tensor_by_name(costScoreName+":0")    
+    costProb = graph.get_tensor_by_name(costProbName+":0")    
+    costReg = graph.get_tensor_by_name(costRegName+":0")    
     
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)       
     with tf.control_dependencies(update_ops):
@@ -131,9 +140,12 @@ def trainOnData(args,trainFeed):
         for j in range (n_batches): 
             batch = sess.run(nextElement)
             fd = dict(zip(iFeed,batch))
-            _,lv = sess.run([optimizer,cost],feed_dict=fd)
-            print (i," ",j,"/",n_batches," ",np.mean(lv))
-        print ("epoch ",i, " ", np.mean(lv))
+            _,lv,cs,cp,cr = sess.run([optimizer,cost,costScore,costProb,costReg],feed_dict=fd)
+            print (i," ",j,"/",n_batches," ", np.mean(lv), np.mean(cs), np.mean(cp), np.mean(cr))
+        print ("epoch ",i, " ", np.mean(lv), np.mean(cs), np.mean(cp), np.mean(cr))
+    #Save the updated params
+    saver.save(sess, args.model,write_meta_graph=False)
+
 
 def train(args):
     with open(args.datafile,"rb") as f:
@@ -183,14 +195,14 @@ python alpha1.py debug
     subCreate.add_argument('-rows',type=int,default=7,help="input rows")
     subCreate.add_argument('-columns',type=int,default=7,help="input columns")
     subCreate.add_argument('-probs',type=int,default=49,help="output probability count")
-    subCreate.add_argument('-rweight',type=float,default=0.1,help="output probability count")
+    subCreate.add_argument('-rweight',type=float,default=0.001,help="output probability count")
     subCreate.add_argument('-model',default=modelPath,help="output Model dir")
     subInfer = subParsers.add_parser('infer',help='infer -h')
     subInfer.add_argument('-model',default=modelPath,help="input Model dir")
     subTrain = subParsers.add_parser('train',help='train -h')
     subTrain.add_argument('-model',default=modelPath,help="input & output Model dir")
     subTrain.add_argument('-datafile',default=datafile,help="input msgpack file")
-    subTrain.add_argument('-lr',type=float,default=0.00001,help="learning rate")
+    subTrain.add_argument('-lr',type=float,default=0.000001,help="learning rate")
     return parserMode
             
 def main():

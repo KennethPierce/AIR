@@ -391,17 +391,23 @@ msgPackTrainData :: [Mcts] -> ([Board],[Int],[Int])
 msgPackTrainData mctss = unzip3 (foldr trainData [] mctss)
     where
         trainData :: Mcts -> TrainData -> TrainData
-        trainData mcts td = recreate emptyBoard SQBlack hist
+        trainData mcts td = recreate wb hist
             where
-                hist = reverse (history mcts)
-                winnerScore = if (won mcts) == SQBlack then 1 else -1
+                (hi:his) = reverse (history mcts)
+                w = won mcts
+                hist = if w == SQBlack then (hi:his) else his
+                winnerScore = if w == SQBlack then 1 else -1
+                wb = if w == SQBlack then emptyBoard else boardSet emptyBoard [(hi,SQBlack)]
+                np = if w == SQBlack then SQWhite else SQBlack
                 -- only write winner board, only write as black board
-                recreate :: Board -> Square -> History -> TrainData
-                recreate _ _ [] = td
-                recreate b pl (h:hs) = (b,winnerScore,h):(recreate newBoard np hs)
+                recreate :: Board ->  History -> TrainData
+                recreate _ [] = td
+                recreate _ (_:[]) = td 
+                --skip loser board
+                recreate (bb,bw) (h1:h2:hs) = (b',winnerScore,h1):(recreate newBoard hs)
                     where 
-                        newBoard = boardSet b [(h,pl)]
-                        np = if (player mcts) == SQBlack then SQWhite else SQBlack
+                        b' = if w == SQBlack then (bb,bw) else (bw,bb) 
+                        newBoard = boardSet (bb,bw) [(h1,w),(h2,np)]
 
 mctsInitBoard :: Mcts
 mctsInitBoard = initialMcts emptyBoard SQBlack SQEmpty [] 
