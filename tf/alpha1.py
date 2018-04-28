@@ -93,8 +93,16 @@ def load(args):
     saver = tf.train.import_meta_graph(args.model+".meta")
     saver.restore(sess,args.model)
     return sess,saver
+
+def mkTensor(bl,wh):
+    t1 = np.array(bl).astype(np.float32).reshape(1,7,7,1)
+    t2 = np.array(wh).astype(np.float32).reshape(1,7,7,1)
+    ret = np.concatenate([t1,t2],axis=3)
+    assert (ret.shape == (1,7,7,2))
+    return ret
+
     
-def infer(args,inferFeed):
+def inferOnDataFn(args):
     sess,saver = load(args)
     graph = tf.get_default_graph()
     x = graph.get_tensor_by_name(inferName+":0")
@@ -102,13 +110,28 @@ def infer(args,inferFeed):
     sess.run(tf.assign(isTrainingVar,False))
     headScore = graph.get_tensor_by_name(headScoreName+":0")    
     headProbs = graph.get_tensor_by_name(headProbsName+":0")  
-    result = sess.run([headScore,headProbs],feed_dict={x:inferFeed})
-    print (result)
+    def inferOnData(inferFeed):
+        result = sess.run([headScore,headProbs],feed_dict={x:inferFeed})
+        return result
+    #print (result)
+    return inferOnData
+
+
+def infer(args):
+    inferOnData = inferOnDataFn(args)
+    foo = msgpack.Unpacker(sys.stdin.buffer)
+    for boards in foo:
+        b = np.concatenate([mkTensor(bl,wh) for bl,wh in boards],axis=0)
+        (scores,probs) = inferOnData(b)
+        sl = [i.item() for i in scores]
+        sp = [[j.item() for j in i] for i in probs]
+        mp = msgpack.pack((sl,sp),sys.stdout.buffer )
 
 def testInfer(args):
+    sess,saver = load(args)
     r = np.random.rand(1,7,7,2).astype(np.float32)
 #    tIn = tf.constant(r,shape=r.shape)
-    infer(args,r)
+    inferOnData(args,sess,saver,r)
 
 def trainOnData(args,trainFeed):
     sess,saver = load(args)    
@@ -162,7 +185,7 @@ def train(args):
         ret = np.concatenate([t1,t2],axis=3)
         assert (ret.shape == (1,7,7,2))
         return ret
-    b = np.concatenate([mkT(bl,wh) for bl,wh in boards],axis=0)
+    b = np.concatenate([mkTensor(bl,wh) for bl,wh in boards],axis=0)
     trainOnData(args,(b,s,p))    
         
 def testTrain(args):
@@ -208,11 +231,10 @@ python alpha1.py debug
 def main():
     parser = cmdParser();            
     args = parser.parse_args()
-    print (args)
     if args.mode == 'create' :
         createModel(args)
     elif args.mode == 'infer' :
-        testInfer(args)
+        infer(args)
     elif args.mode == 'train' :
         train(args)
 main()    
