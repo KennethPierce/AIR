@@ -9,6 +9,9 @@ import sys
 import tensorflow as tf
 import numpy as np
 import msgpack 
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
+import json
 
 #constants
 headScoreName = "headScore"
@@ -116,6 +119,35 @@ def inferOnDataFn(args):
     #print (result)
     return inferOnData
 
+def mkClass(inferOnData):
+    class S(BaseHTTPRequestHandler):
+        inferfn = inferOnData
+        def _set_headers(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+
+        def do_GET(self):
+            self._set_headers()
+            msg = "<html><body><h1>Get!</h1></body></html>".encode('utf-8')
+            self.wfile.write(msg)
+
+        def do_HEAD(self):
+            self._set_headers()
+            
+        def do_POST(self):
+            l = int (self.headers.get('content-length'))
+            r = self.rfile.read(l).decode()
+            boards = json.loads(r)
+            #print (r,boards)
+            b = np.concatenate([mkTensor(bl,wh) for bl,wh in boards],axis=0)
+            score,probs = inferOnData(b)
+            c = np.concatenate([score,probs],axis=1)
+            tl = c.tolist()
+            msg = json.dumps(tl).encode('utf-8')
+            self._set_headers()
+            self.wfile.write(msg)
+    return S
 
 def infer(args):
     inferOnData = inferOnDataFn(args)
@@ -125,13 +157,23 @@ def infer(args):
         (scores,probs) = inferOnData(b)
         sl = [i.item() for i in scores]
         sp = [[j.item() for j in i] for i in probs]
-        mp = msgpack.pack((sl,sp),sys.stdout.buffer )
+        mp = msgpack.pack((sl,sp),sys.stdout.buffer)
+        sys.stdout.flush()
+
+def server(args):
+    def run(server_class=HTTPServer, handler_class=mkClass(inferOnDataFn(args)), port=80):
+        server_address = ('', port)
+        httpd = server_class(server_address, handler_class)
+        print ('Starting httpd...')
+        httpd.serve_forever()
+    run()
+
 
 def testInfer(args):
     sess,saver = load(args)
     r = np.random.rand(1,7,7,2).astype(np.float32)
 #    tIn = tf.constant(r,shape=r.shape)
-    inferOnData(args,sess,saver,r)
+    inferOnData(args)(r)
 
 def trainOnData(args,trainFeed):
     sess,saver = load(args)    
@@ -203,7 +245,7 @@ def cmdParser():
     usageExample = '''
 example:    
 python alpha1.py create 
-python alpha1.py infer -load=mlmodel < infer.msgpack > probsAndScore.msgpack
+python alpha1.py server -load=mlmodel 
 python alpha1.py train -load=mlmodel < train.msgpack > mlmodel
 python alpha1.py debug        
     '''
@@ -220,7 +262,7 @@ python alpha1.py debug
     subCreate.add_argument('-probs',type=int,default=49,help="output probability count")
     subCreate.add_argument('-rweight',type=float,default=0.001,help="output probability count")
     subCreate.add_argument('-model',default=modelPath,help="output Model dir")
-    subInfer = subParsers.add_parser('infer',help='infer -h')
+    subInfer = subParsers.add_parser('server',help='server -h')
     subInfer.add_argument('-model',default=modelPath,help="input Model dir")
     subTrain = subParsers.add_parser('train',help='train -h')
     subTrain.add_argument('-model',default=modelPath,help="input & output Model dir")
@@ -233,8 +275,8 @@ def main():
     args = parser.parse_args()
     if args.mode == 'create' :
         createModel(args)
-    elif args.mode == 'infer' :
-        infer(args)
+    elif args.mode == 'server' :
+        server(args)
     elif args.mode == 'train' :
         train(args)
 main()    
