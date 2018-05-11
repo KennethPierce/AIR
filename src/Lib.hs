@@ -9,6 +9,8 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 --{-# LANGUAGE DeriveAnyClass #-}
 
 
@@ -20,8 +22,6 @@ import System.Random
 
 import qualified Control.Exception 
 import qualified Debug.Trace
-
-
 import qualified Data.MessagePack as MP
 import qualified Data.ByteString.Lazy as BL
 import qualified Control.Monad
@@ -31,6 +31,11 @@ import qualified Data.Typeable -- for haxl
 import qualified Haxl.Core --for batching call to TF inferences
 import qualified Haxl.Prelude
 import qualified Data.Set as Set
+import Network.Wreq
+import qualified Control.Lens
+--import Data.Aeson.Lens
+--import qualified Data.Text as T
+import Data.Aeson
 --import qualified Data.ByteString as BS
 
 boardSize :: Int
@@ -56,6 +61,8 @@ type RandInts = [Int]
 type RandFloats = [Float]
 type History = [Int]
 type Moves = Set.Set Int
+
+
 
 type HaxlId = Haxl.Core.GenHaxl ()
 runHaxlId :: HaxlId a -> IO (a)
@@ -91,19 +98,26 @@ instance Haxl.Core.StateKey TensorFlowReq where
 vectOne :: V.Vector Float
 vectOne = V.replicate (boardSize*boardSize) 1.0
 
+type RespInt = Response [[Float]]
+postMsg :: [Board] ->  IO [[Float]]
+postMsg boards = do
+    let msg_json = toJSON boards
+    p <- post "http://127.0.0.1" msg_json
+    r <- asJSON p :: IO RespInt
+    pure (r Control.Lens.^. responseBody)
+
 
 instance Haxl.Core.DataSource u TensorFlowReq where
 --  fetch :: State req -> Flags -> u -> [BlockedFetch req] -> PerformFetch
-    fetch _state _flags _userEnv blockedFetches = Haxl.Core.SyncFetch $  do
+    fetch _ _flags _userEnv blockedFetches = Haxl.Core.SyncFetch $  do
         let 
-            _b :: [Board]
+            boards :: [Board]
             resultVarInferences :: [Haxl.Core.ResultVar (V.Vector Float,Float)]
-            (_b,resultVarInferences) = Data.List.unzip [(b1, r) | Haxl.Core.BlockedFetch (GetInference b1) r <- blockedFetches]
+            (boards,resultVarInferences) = Data.List.unzip [(b1, r) | Haxl.Core.BlockedFetch (GetInference b1) r <- blockedFetches]
             batchGetInference :: IO ()
             batchGetInference = do
-                --putStrLn (showBoard (Data.List.head _b))
-                --putStrLn ("Batched call " Data.List.++ (show (Data.List.length resultVarInferences)))
-                let results = [(vectOne,0) | _ <- ([0..] :: [Int])  ] 
+                msg <- postMsg boards
+                let results = [(V.fromList probs,score) | (score:probs) <- msg]
                 Haxl.Prelude.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
         Control.Monad.unless (Data.List.null resultVarInferences) batchGetInference
 
@@ -382,7 +396,7 @@ selfPlaysIO num cnt = do
     mctss' <- runHaxlId splay
     _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
     let trainData = msgPackTrainData mctss'
-    BL.writeFile "mctsTrainBII.mp" $ MP.pack trainData
+    BL.writeFile "mctsTrainBII.mp" (MP.pack trainData)
     pure ()
 
 type TrainData = [(Board,Int,Int)]
@@ -411,6 +425,14 @@ msgPackTrainData mctss = unzip3 (foldr trainData [] mctss)
 
 mctsInitBoard :: Mcts
 mctsInitBoard = initialMcts emptyBoard SQBlack SQEmpty [] 
+
+
+
+
+inferPost :: IO ()
+inferPost = do
+    postMsg  [emptyBoard,emptyBoard `boardSet` [(i,SQBlack) | i <- [0..4]]]
+    pure ()
 
 testWinner :: IO ()
 testWinner = do

@@ -33,9 +33,13 @@ library:
   - containers
   - hashable  
   - haxl
+  - process
   - mtl
   - data-msgpack
   - bytestring
+  - wreq
+  - lens
+  - aeson
 
 executables:
   mctsGames-exe:
