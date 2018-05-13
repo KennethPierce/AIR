@@ -191,8 +191,8 @@ showBoard :: Board -> String
 showBoard b = unlines ls 
     where 
         squareToChar SQEmpty = '.'
-        squareToChar SQBlack = 'x'
-        squareToChar SQWhite = 'o'
+        squareToChar SQBlack = 'b'
+        squareToChar SQWhite = 'w'
         ls = do 
             let bs = [0..(boardSize-1)]
             i <- bs
@@ -395,7 +395,8 @@ selfPlaysIO num cnt = do
     let splay = selfPlays mctss cnt rs
     mctss' <- runHaxlId splay
     _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
-    let trainData = msgPackTrainData mctss'
+    let trainData@(bs,_,_) = msgPackTrainData mctss'
+    _ <- Haxl.Prelude.forM_ bs (\b -> putStrLn (showBoard b))
     BL.writeFile "mctsTrainBII.mp" (MP.pack trainData)
     pure ()
 
@@ -409,16 +410,13 @@ msgPackTrainData mctss = unzip3 (foldr trainData [] mctss)
             where
                 (hi:his) = reverse (history mcts)
                 w = won mcts
-                hist = if w == SQBlack then (hi:his) else his
-                winnerScore = if w == SQBlack then 1 else -1
-                wb = if w == SQBlack then emptyBoard else boardSet emptyBoard [(hi,SQBlack)]
-                np = if w == SQBlack then SQWhite else SQBlack
+                (wb,np,hist,ws) = if w == SQWhite then (emptyBoard,SQBlack,hi:his,1) else (boardSet emptyBoard [(hi,SQWhite)],SQWhite,his,-1)
                 -- only write winner board, only write as black board
                 recreate :: Board ->  History -> TrainData
                 recreate _ [] = td
                 recreate _ (_:[]) = td 
                 --skip loser board
-                recreate (bb,bw) (h1:h2:hs) = (b',winnerScore,h1):(recreate newBoard hs)
+                recreate (bb,bw) (h1:h2:hs) = (b',ws,h1):(recreate newBoard hs)
                     where 
                         b' = if w == SQBlack then (bb,bw) else (bw,bb) 
                         newBoard = boardSet (bb,bw) [(h1,w),(h2,np)]
