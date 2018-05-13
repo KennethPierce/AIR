@@ -12,6 +12,11 @@ import msgpack
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import socketserver
 import json
+import matplotlib.pyplot as plt
+
+
+
+
 
 #constants
 headScoreName = "headScore"
@@ -27,6 +32,11 @@ optimizerName = "optimizerName"
 isTrainingName = "isTrainingBool"
 # 1x9x9x2 binary image input
 isTrainingVar=None
+
+
+
+
+
 
 def layer (nnInput,chan,stride,skipInput=None):
     c = tf.contrib.layers.conv2d(nnInput,chan,stride)
@@ -212,7 +222,9 @@ def trainOnData(args,trainFeed):
     saver.save(sess, args.model,write_meta_graph=False)
 
 
-def train(args):
+def trainData(args):
+    """reads training file
+    returns boards,winner,moves"""
     with open(args.datafile,"rb") as f:
         (boards,scores,moves) = msgpack.unpack(f)  
     sl = len(scores)
@@ -228,7 +240,11 @@ def train(args):
         assert (ret.shape == (1,7,7,2))
         return ret
     b = np.concatenate([mkTensor(bl,wh) for bl,wh in boards],axis=0)
-    trainOnData(args,(b,s,p))    
+    return (b,s,p)
+    
+def train(args):
+    bsp = trainData(args)    
+    trainOnData(args,bsp)    
         
 def testTrain(args):
     bs = 100
@@ -238,6 +254,17 @@ def testTrain(args):
     probs = np.eye(49)[np.random.choice(49, bs)]
     trainOnData(args,(boards,scores,probs))
     pass    
+
+
+def showBoard(bs,probs):
+    for b,p in zip(bs,probs):
+        c = np.concatenate([b,p.reshape(7,7,1)],axis=2)
+        assert (c.shape == (7,7,3))
+        plt.imshow(c)
+        plt.show()
+
+
+
 
 def cmdParser():
     modelPath =     "./model/a1Model"
