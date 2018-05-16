@@ -362,11 +362,13 @@ mctsUpdates mcts cnt (i:is) = do
         totPlays = plays mcts
 
 --reusing stats from previous plays
-selectTopMoveDet :: Mcts -> Mcts
-selectTopMoveDet mcts = mcts'
+selectTopMove :: Mcts -> Int -> Mcts
+selectTopMove mcts r = mcts'
     where 
           mostPlays = Prelude.maximum [plays m | m <- children mcts]
-          mcts' = Prelude.head [m | m <- children mcts, plays m == mostPlays]
+          mp =  [m | m <- children mcts, plays m == mostPlays]
+          rm = r `mod` (length mp)
+          mcts' = mp !! rm
 
     
 
@@ -375,7 +377,7 @@ selfPlay mcts@(MkMcts _ _ _ _ _ SQEmpty _ _) cnt (r:rs) = do
     let g = mkStdGen r
     let rs' = randoms g
     mctsUpdate <- mctsUpdates mcts cnt rs'
-    let mcts'  = selectTopMoveDet mctsUpdate
+    let mcts'  = selectTopMove mctsUpdate r
     selfPlay mcts' cnt rs
 selfPlay mcts _ _ =  pure mcts
 
@@ -397,6 +399,7 @@ selfPlaysIO num cnt = do
     _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
     let trainData@(bs,_,_) = msgPackTrainData mctss'
     _ <- Haxl.Prelude.forM_ bs (\b -> putStrLn (showBoard b))
+
     BL.writeFile "mctsTrainBII.mp" (MP.pack trainData)
     pure ()
 
@@ -414,11 +417,13 @@ msgPackTrainData mctss = unzip3 (foldr trainData [] mctss)
                 -- only write winner board, only write as black board
                 recreate :: Board ->  History -> TrainData
                 recreate _ [] = td
-                recreate _ (_:[]) = td 
-                --skip loser board
-                recreate (bb,bw) (h1:h2:hs) = (b',ws,h1):(recreate newBoard hs)
+                recreate (bb,bw) (h1:[]) = (b',ws,h1):((V.reverse bb',V.reverse bw'),ws,boardSize*boardSize-1-h1):td
                     where 
-                        b' = if w == SQBlack then (bb,bw) else (bw,bb) 
+                        b'@(bb',bw') = if w == SQBlack then (bb,bw) else (bw,bb) 
+                --skip loser board, add the mirror board
+                recreate (bb,bw) (h1:h2:hs) = (b',ws,h1):((V.reverse bb',V.reverse bw'),ws,boardSize*boardSize-1-h1):(recreate newBoard hs)
+                    where 
+                        b'@(bb',bw') = if w == SQBlack then (bb,bw) else (bw,bb) 
                         newBoard = boardSet (bb,bw) [(h1,w),(h2,np)]
 
 mctsInitBoard :: Mcts
