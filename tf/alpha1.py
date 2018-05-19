@@ -38,25 +38,26 @@ isTrainingVar=None
 
 
 
-def layer (nnInput,chan,stride,skipInput=None):
-    c = tf.contrib.layers.conv2d(nnInput,chan,stride)
+def layer (nnInput,fcnt,ksize,skipInput=None):
+    c = tf.contrib.layers.conv2d(nnInput,fcnt,kernel_size=ksize)
     n = tf.contrib.layers.batch_norm(c,is_training=isTrainingVar)
     if None != skipInput:
         n = n+skipInput
     r = tf.nn.relu(n)
     return r
 
-def residual(nnInput,chan):
-    l = layer(nnInput,chan,3)
-    r = layer(l,chan,3,nnInput,)
+def residual(nnInput,fcnt):
+    l = layer(nnInput,fcnt,3)
+    r = layer(l,fcnt,3,nnInput,)
     return r
     
 def headMove(nnInput,cntProbs):
     l = layer(nnInput,2,1)
     f = tf.contrib.layers.flatten(l)
     logits = tf.contrib.layers.fully_connected(f,cntProbs)
-    probs = tf.nn.softmax(logits,name=headProbsName)
-    return probs
+    logits = tf.add(logits,0,name=headProbsName)
+    #probs = tf.nn.softmax(logits)
+    return logits
 
 def headScore(nnInput,cntProbs):
     l = layer(nnInput,1,1)
@@ -67,11 +68,9 @@ def headScore(nnInput,cntProbs):
 
 def headCost(score,probs,scoreTarget,probsTarget,rweight):
     s = tf.pow(score-scoreTarget,2) 
-    s = tf.add(s,0,name=costScoreName)
-    p = 0-probsTarget*tf.log(probs)     
-    p = tf.add(p,0,name=costProbName)
+    s = 0.1 * tf.add(s,0,name=costScoreName)
+    p = tf.nn.softmax_cross_entropy_with_logits_v2(labels=probsTarget,logits=probs,name=costProbName)     
     tv = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-    print ("weights: ",tv)
     l2s = [tf.nn.l2_loss(i) for i in tv]
     r=tf.add_n(l2s)
     r = r **(0.5)
@@ -82,7 +81,7 @@ def headCost(score,probs,scoreTarget,probsTarget,rweight):
 def createModel(args):
     tf.reset_default_graph()
     global isTrainingVar 
-    isTrainingVar = tf.Variable(False,trainable=False,name=isTrainingName,dtype=tf.bool)
+    isTrainingVar = tf.placeholder(tf.bool,name=isTrainingName)#tf.Variable(False,trainable=False,name=isTrainingName,dtype=tf.bool)
 #    x_const = tf.constant(tIn,shape=tIn.shape)
     x_pl = tf.placeholder(tf.float32,(None,args.rows,args.columns,args.layers),name=inferName)
     initial = layer(x_pl,args.filters,3)
@@ -103,6 +102,7 @@ def createModel(args):
 def load(args):   
     sess=tf.Session()    
     #First let's load meta graph and restore weights
+    
     saver = tf.train.import_meta_graph(args.model+".meta")
     saver.restore(sess,args.model)
     return sess,saver
@@ -120,11 +120,10 @@ def inferOnDataFn(args):
     graph = tf.get_default_graph()
     x = graph.get_tensor_by_name(inferName+":0")
     isTrainingVar = graph.get_tensor_by_name(isTrainingName+":0")    
-    sess.run(tf.assign(isTrainingVar,False))
     headScore = graph.get_tensor_by_name(headScoreName+":0")    
     headProbs = graph.get_tensor_by_name(headProbsName+":0")  
     def inferOnData(inferFeed):
-        result = sess.run([headScore,headProbs],feed_dict={x:inferFeed})
+        result = sess.run([headScore,headProbs],feed_dict={x:inferFeed,isTrainingVar:0})
         return result
     #print (result)
     return inferOnData
@@ -179,11 +178,7 @@ def server(args):
     run()
 
 
-def testInfer(args):
-    sess,saver = load(args)
-    r = np.random.rand(1,7,7,2).astype(np.float32)
-#    tIn = tf.constant(r,shape=r.shape)
-    inferOnData(args)(r)
+
 
 def trainOnData(args,trainFeed):
     sess,saver = load(args)    
@@ -193,13 +188,12 @@ def trainOnData(args,trainFeed):
           , graph.get_tensor_by_name(scoreTargetName+":0")
           , graph.get_tensor_by_name(probsTargetName+":0"))
 
-    batch_size = 1024
+    batch_size = 128
     dataset = tf.data.Dataset.from_tensor_slices(trainFeed).shuffle(20000).batch(batch_size).repeat()
     iter = dataset.make_one_shot_iterator()
     n_batches = trainFeed[0].shape[0] // batch_size    
     
     isTrainingVar = graph.get_tensor_by_name(isTrainingName+":0")    
-    sess.run(tf.assign(isTrainingVar,True))
     cost = graph.get_tensor_by_name(costName+":0")    
     costScore = graph.get_tensor_by_name(costScoreName+":0")    
     costProb = graph.get_tensor_by_name(costProbName+":0")    
@@ -208,6 +202,9 @@ def trainOnData(args,trainFeed):
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)       
     with tf.control_dependencies(update_ops):
         optimizer = tf.train.GradientDescentOptimizer(args.lr).minimize(cost,name=optimizerName)
+        #mopt = tf.train.MomentumOptimizer(args.lr,0.9)
+        #optimizer = mopt.minimize(cost,name=optimizerName)
+        #sess.run(tf.variables_initializer(mopt.variables()))
     nextElement = iter.get_next()        
     #sess.run(iter.initializer, feed_dict=dict(zip(iFeed,trainFeed)))                
     print ("training...")
@@ -215,6 +212,7 @@ def trainOnData(args,trainFeed):
         for j in range (n_batches): 
             batch = sess.run(nextElement)
             fd = dict(zip(iFeed,batch))
+            fd[isTrainingVar]=1
             _,lv,cs,cp,cr = sess.run([optimizer,cost,costScore,costProb,costReg],feed_dict=fd)
             print (i," ",j,"/",n_batches," ", np.mean(lv), np.mean(cs), np.mean(cp), np.mean(cr))
         print ("epoch ",i, " ", np.mean(lv), np.mean(cs), np.mean(cp), np.mean(cr))
@@ -262,8 +260,23 @@ def showBoard(bs,probs):
         assert (c.shape == (7,7,3))
         plt.imshow(c)
         plt.show()
+        
+def showInfer(inferFn,bs,probs):
+    for b,p in zip(bs,probs):
+        c = np.concatenate([b,p.reshape(7,7,1)],axis=2)
+        assert (c.shape == (7,7,3))
+        plt.imshow(c)
+        plt.show()
+        score,infer = inferFn(b.reshape(1,7,7,2))
+        plt.imshow(infer.reshape(7,7))
+        plt.show()
 
-
+def setupShow():
+    parser = cmdParser();            
+    args = parser.parse_args(['train'])
+    b,s,p = trainData(args)
+    inferFn = inferOnDataFn(args)
+    return inferFn,b,p
 
 
 def cmdParser():
@@ -282,19 +295,19 @@ python alpha1.py debug
     subParsers = parserMode.add_subparsers(help='modes:',dest='mode')    
     subCreate = subParsers.add_parser('create',help='create -h')
     subCreate.add_argument('-layers',type=int,default=2,help="input layers")
-    subCreate.add_argument('-filters',type=int,default=4,help="filters per residual layer")
-    subCreate.add_argument('-residuals',type=int,default=3,help="residual layers")
+    subCreate.add_argument('-filters',type=int,default=64,help="filters per residual layer")
+    subCreate.add_argument('-residuals',type=int,default=8,help="residual layers")
     subCreate.add_argument('-rows',type=int,default=7,help="input rows")
     subCreate.add_argument('-columns',type=int,default=7,help="input columns")
     subCreate.add_argument('-probs',type=int,default=49,help="output probability count")
-    subCreate.add_argument('-rweight',type=float,default=0.001,help="output probability count")
+    subCreate.add_argument('-rweight',type=float,default=0.0001,help="output probability count")
     subCreate.add_argument('-model',default=modelPath,help="output Model dir")
     subInfer = subParsers.add_parser('server',help='server -h')
     subInfer.add_argument('-model',default=modelPath,help="input Model dir")
     subTrain = subParsers.add_parser('train',help='train -h')
     subTrain.add_argument('-model',default=modelPath,help="input & output Model dir")
     subTrain.add_argument('-datafile',default=datafile,help="input msgpack file")
-    subTrain.add_argument('-lr',type=float,default=0.000001,help="learning rate")
+    subTrain.add_argument('-lr',type=float,default=0.00001,help="learning rate")
     return parserMode
             
 def main():

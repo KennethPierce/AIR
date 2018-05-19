@@ -389,12 +389,12 @@ selfPlays mctss cnt rs = Haxl.Prelude.mapM play (Data.List.zip mctss rs)
                 g = mkStdGen r
                 rs' = randoms g
 
-selfPlaysIO :: Int -> Int -> IO ()
-selfPlaysIO num cnt = do 
+selfPlaysIO :: Int -> Int -> Int -> IO ()
+selfPlaysIO numGames numRollouts bMoves= do 
     g <- newStdGen
-    let rs = randoms g
-    let mctss = Data.List.replicate num mctsInitBoard
-    let splay = selfPlays mctss cnt rs
+    let (r:rs) = randoms g
+    let mctss = mctsRandomBoards numGames bMoves (randoms (mkStdGen r))
+    let splay = selfPlays mctss numRollouts rs
     mctss' <- runHaxlId splay
     _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
     let trainData@(bs,_,_) = msgPackTrainData mctss'
@@ -429,8 +429,18 @@ msgPackTrainData mctss = unzip3 (foldr trainData [] mctss)
 mctsInitBoard :: Mcts
 mctsInitBoard = initialMcts emptyBoard SQBlack SQEmpty [] 
 
+mctsRandomBoard :: Mcts -> RandInts -> Mcts
+mctsRandomBoard m [] = m
+mctsRandomBoard m (r:rs) = mctsRandomBoard m' rs
+    where
+        cs = children m
+        mr = mod r (length cs)
+        m' = cs !! mr
 
-
+mctsRandomBoards :: Int -> Int -> RandInts -> [Mcts]
+mctsRandomBoards numGames numMoves rs = take numGames [mctsRandomBoard mctsInitBoard (take numMoves rs') | rs' <- rands]
+    where
+        rands = [randoms (mkStdGen r) | r <- rs]
 
 inferPost :: IO ()
 inferPost = do
