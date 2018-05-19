@@ -403,28 +403,67 @@ selfPlaysIO numGames numRollouts bMoves= do
     BL.writeFile "mctsTrainBII.mp" (MP.pack trainData)
     pure ()
 
-type TrainData = [(Board,Int,Int)]
+type TrainData = (Board,Int,Int)
+type TrainDatas = [TrainData]
+    
+
+rot90V :: V.Vector Int 
+rot90V =  V.fromList [ro90Idx i | i <- [0..boardSize*boardSize-1]]
+    where
+        ro90Idx idx = (boardSize - 1 - r) * boardSize + q 
+            where (q,r) = quotRem idx boardSize
+
+rot90Board ::  TrainData -> TrainData
+rot90Board ((bb,bw),ws,move) = permBoard rot90V (bb,bw) ws move
+
+mirrorV :: V.Vector Int
+mirrorV = V.fromList [mirrorIdx i | i <- [0..boardSize*boardSize-1]]
+    where 
+        mirrorIdx :: Int -> Int
+        mirrorIdx idx = boardSize*q + boardSize - r -1
+            where (q,r) = quotRem idx boardSize
+
+mirrorBoard :: TrainData -> TrainData
+mirrorBoard ((bb,bw),ws,move) = permBoard mirrorV (bb,bw) ws move
+
+permBoard :: V.Vector Int -> Board -> Int -> Int -> TrainData
+permBoard v (bb,bw) ws move = ((perm bb,perm bw),ws,mirrorV V.! move)
+    where perm b = V.backpermute b v
+
+
+addBoards :: TrainData -> TrainDatas -> TrainDatas
+addBoards ((bb,bw),ws,m) tds = tds''
+    where 
+        b = if ws == -1 then (bb,bw) else (bw,bb) 
+        td = (b,ws,m)
+        rotBoards td0 tds0 = td0:td90:td180:td270:tds0
+            where 
+                td90  = rot90Board td0
+                td180 = rot90Board td90
+                td270 = rot90Board td180
+
+        mtd  = mirrorBoard td
+        tds' = rotBoards mtd tds
+        tds'' = rotBoards td tds'
+
 
 msgPackTrainData :: [Mcts] -> ([Board],[Int],[Int])
 msgPackTrainData mctss = unzip3 (foldr trainData [] mctss)
     where
-        trainData :: Mcts -> TrainData -> TrainData
-        trainData mcts td = recreate wb hist
+        trainData :: Mcts -> TrainDatas -> TrainDatas
+        trainData mcts tds = recreate wb hist
             where
                 (hi:his) = reverse (history mcts)
                 w = won mcts
                 (wb,np,hist,ws) = if w == SQWhite then (emptyBoard,SQBlack,hi:his,1) else (boardSet emptyBoard [(hi,SQWhite)],SQWhite,his,-1)
-                -- only write winner board, only write as black board
-                recreate :: Board ->  History -> TrainData
-                recreate _ [] = td
-                recreate (bb,bw) (h1:[]) = (b',ws,h1):((V.reverse bb',V.reverse bw'),ws,boardSize*boardSize-1-h1):td
-                    where 
-                        b'@(bb',bw') = if w == SQBlack then (bb,bw) else (bw,bb) 
+
+                recreate :: Board ->  History -> TrainDatas
+                recreate _ [] = tds
+                recreate b (h1:[]) = addBoards (b,ws,h1) tds
                 --skip loser board, add the mirror board
-                recreate (bb,bw) (h1:h2:hs) = (b',ws,h1):((V.reverse bb',V.reverse bw'),ws,boardSize*boardSize-1-h1):(recreate newBoard hs)
+                recreate b (h1:h2:hs) = addBoards (b,ws,h1) (recreate newBoard hs)
                     where 
-                        b'@(bb',bw') = if w == SQBlack then (bb,bw) else (bw,bb) 
-                        newBoard = boardSet (bb,bw) [(h1,w),(h2,np)]
+                        newBoard = boardSet b [(h1,w),(h2,np)]
 
 mctsInitBoard :: Mcts
 mctsInitBoard = initialMcts emptyBoard SQBlack SQEmpty [] 
