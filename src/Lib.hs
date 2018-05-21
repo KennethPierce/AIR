@@ -284,16 +284,16 @@ autoPlayRollout mcts@(MkMcts b p m _ _ w _ _) (r:rs) = do
         ls = moves mcts
         nextPlayer = if p == SQBlack then SQWhite else SQBlack
         
-
-ucb1 :: Mcts -> Int -> Float
-ucb1 mcts totalPlays = if (plays mcts) == 0 then inf else mean + explore
+-- Give highest or lowest score to won games; otherwise extra rollouts might happen
+ucb1 :: Mcts -> Int -> (Float,Float)
+ucb1 (MkMcts _ _ _ _ 0 SQEmpty _ _) _ = (0,1/0)
+ucb1 (MkMcts _ _ _ mwins mplays SQEmpty _ _) totalPlays = (0,mean+explore)
     where
         mean :: Float
-        mean = (fromIntegral (wins mcts)) / (fromIntegral (plays mcts))
+        mean = (fromIntegral mwins) / (fromIntegral mplays)
         explore :: Float
-        explore = (2*(log (fromIntegral totalPlays)) / (fromIntegral(plays mcts))) ** 0.5
-        inf :: Float
-        inf = 1.0/0.0
+        explore = (2*(log (fromIntegral totalPlays)) / (fromIntegral mplays )) ** 0.5
+ucb1 (MkMcts _ mplayer _ _ _ mwon _ _) _ = if (mplayer == mwon) then (1/0,0) else (-1/0,0)
 
 --returned first list is reversed
 selectTopRandomly :: [Mcts] -> Int -> Float -> ([Mcts],Mcts,[Mcts])
@@ -346,20 +346,35 @@ oneMctsUpdate mcts@(MkMcts _ _ _ _ _ winner _ _) _ _ = do
         newWins = (wins mcts) + if winner == (player mcts) then 1 else 0
         ret = mcts {wins=newWins, plays=newPlays}
 
-            
-
+  
+manyMctsUpdate :: Mcts -> Int -> RandFloats ->  HaxlId (Mcts,Int)
+manyMctsUpdate mcts@(MkMcts _ _ _ _ p _ cs _) rollouts rs = do
+    x <- Haxl.Prelude.mapM update zs   
+    let wins' = sum [wins i | i <- x]
+    let plays' = sum [plays i | i <- x]
+    let rollouts' = length [b | (_,b) <- zs , b]
+    pure (mcts{children=x,wins=wins',plays=plays'},min rollouts rollouts')
+    where
+        us = [ucb1 m p | m <- cs]
+        mx = maximum us
+        zs = zip cs [mx == i | i <- us]
+        update :: (Mcts,Bool) -> HaxlId Mcts
+        update (mcts1,True) = do
+            (mcts',_) <- oneMctsUpdate mcts1 p rs
+            pure mcts'
+        update (mcts1,False) = do
+            pure mcts1
 
 mctsUpdates :: Mcts -> Int -> RandInts ->  HaxlId Mcts
 mctsUpdates mcts 0 _ =  Debug.Trace.trace tracemsg (pure mcts)
     where 
         tracemsg = " moveCnt="++show (length (moves mcts))
 mctsUpdates mcts cnt (i:is) = do
-    (mcts',_) <-  oneMctsUpdate mcts totPlays rs
-    mctsUpdates mcts' (cnt-1) is
+    (mcts',rcnt) <-  manyMctsUpdate mcts cnt rs
+    mctsUpdates mcts' (cnt-rcnt) is
     where 
         g = mkStdGen i
         rs = randomRs (0.0,1.0) g    
-        totPlays = plays mcts
 
 --reusing stats from previous plays
 selectTopMove :: Mcts -> Int -> Mcts
