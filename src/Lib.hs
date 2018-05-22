@@ -100,11 +100,19 @@ vectOne = V.replicate (boardSize*boardSize) 1.0
 
 type RespInt = Response [[Float]]
 postMsg :: [Board] ->  IO [[Float]]
-postMsg boards = do
-    let msg_json = toJSON boards
-    p <- post "http://127.0.0.1" msg_json
-    r <- asJSON p :: IO RespInt
-    pure (r Control.Lens.^. responseBody)
+postMsg []  = pure []
+postMsg boards = do 
+    l <- postMsgChunk lhs 
+    r <- postMsg rhs
+    pure (l++r)
+        where 
+        (lhs,rhs) = splitAt 4000 boards
+        postMsgChunk :: [Board] ->  IO [[Float]]
+        postMsgChunk boards = do
+            let msg_json = toJSON boards
+            p <- post "http://127.0.0.1" msg_json
+            r <- asJSON p :: IO RespInt
+            pure (r Control.Lens.^. responseBody)
 
 
 instance Haxl.Core.DataSource u TensorFlowReq where
@@ -197,6 +205,7 @@ showBoard b = unlines ls
             let bs = [0..(boardSize-1)]
             i <- bs
             return [squareToChar (b `boardIndex` (i*boardSize+j)) | j <- bs]
+
 
 
 -- Needs to fix invalid move probabilities            
@@ -413,7 +422,7 @@ selfPlaysIO numGames numRollouts bMoves= do
     mctss' <- runHaxlId splay
     _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
     let trainData@(bs,_,_) = msgPackTrainData mctss'
-    _ <- Haxl.Prelude.forM_ bs (\b -> putStrLn (showBoard b))
+    --_ <- Haxl.Prelude.forM_ bs (\b -> putStrLn (showBoard b))
 
     BL.writeFile "mctsTrainBII.mp" (MP.pack trainData)
     pure ()
