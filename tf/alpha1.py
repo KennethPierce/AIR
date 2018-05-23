@@ -128,6 +128,8 @@ def inferOnDataFn(args):
     #print (result)
     return inferOnData
 
+postCnt = 0
+
 def mkClass(inferOnData):
     class S(BaseHTTPRequestHandler):
         inferfn = inferOnData
@@ -148,6 +150,9 @@ def mkClass(inferOnData):
             l = int (self.headers.get('content-length'))
             r = self.rfile.read(l).decode()
             boards = json.loads(r)
+            global postCnt
+            print (postCnt)
+            postCnt += len(boards)
             #print (r,boards)
             b = np.concatenate([mkTensor(bl,wh) for bl,wh in boards],axis=0)
             score,probs = inferOnData(b)
@@ -188,7 +193,7 @@ def trainOnData(args,trainFeed):
           , graph.get_tensor_by_name(scoreTargetName+":0")
           , graph.get_tensor_by_name(probsTargetName+":0"))
 
-    batch_size = 128
+    batch_size = 1024
     dataset = tf.data.Dataset.from_tensor_slices(trainFeed).shuffle(20000).batch(batch_size).repeat()
     iter = dataset.make_one_shot_iterator()
     n_batches = trainFeed[0].shape[0] // batch_size    
@@ -201,14 +206,19 @@ def trainOnData(args,trainFeed):
     
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)       
     with tf.control_dependencies(update_ops):
-        optimizer = tf.train.GradientDescentOptimizer(args.lr).minimize(cost,name=optimizerName)
-        #mopt = tf.train.MomentumOptimizer(args.lr,0.9)
+        #optimizer = tf.train.GradientDescentOptimizer(args.lr).minimize(cost,name=optimizerName)
+        mopt = tf.train.MomentumOptimizer(0.00000001,0.01)
+        optimizer = mopt.minimize(cost,name=optimizerName)
+
         #optimizer = mopt.minimize(cost,name=optimizerName)
         #sess.run(tf.variables_initializer(mopt.variables()))
     nextElement = iter.get_next()        
-    #sess.run(iter.initializer, feed_dict=dict(zip(iFeed,trainFeed)))                
+    #sess.run(iter.initializer, feed_dict=dict(zip(iFeed,trainFeed))) 
+    #
+    sess.run(tf.global_variables_initializer())
+
     print ("training...")
-    for i in range(10): # epochs
+    for i in range(args.epochs): # epochs
         for j in range (n_batches): 
             batch = sess.run(nextElement)
             fd = dict(zip(iFeed,batch))
@@ -295,7 +305,7 @@ python alpha1.py debug
     subParsers = parserMode.add_subparsers(help='modes:',dest='mode')    
     subCreate = subParsers.add_parser('create',help='create -h')
     subCreate.add_argument('-layers',type=int,default=2,help="input layers")
-    subCreate.add_argument('-filters',type=int,default=64,help="filters per residual layer")
+    subCreate.add_argument('-filters',type=int,default=32,help="filters per residual layer")
     subCreate.add_argument('-residuals',type=int,default=8,help="residual layers")
     subCreate.add_argument('-rows',type=int,default=7,help="input rows")
     subCreate.add_argument('-columns',type=int,default=7,help="input columns")
@@ -308,6 +318,7 @@ python alpha1.py debug
     subTrain.add_argument('-model',default=modelPath,help="input & output Model dir")
     subTrain.add_argument('-datafile',default=datafile,help="input msgpack file")
     subTrain.add_argument('-lr',type=float,default=0.00001,help="learning rate")
+    subTrain.add_argument('-epochs',type=int,default=100,help="num epochs")
     return parserMode
             
 def main():
