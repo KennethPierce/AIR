@@ -4,6 +4,9 @@ alpha go zero on simpler games with smaller everything
 
 
 ##tips and tricks
+stack build --color never
+ghcid -o ghcid.txt
+
 ###profiling time
 stack exec -- *.exe +RTS -sstderr
 
@@ -18,3 +21,4 @@ gv *.ps
 ###profiling threads
 *.exe +RTS -l
 threadscope.linux *.eventlog
+

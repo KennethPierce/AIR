@@ -194,7 +194,7 @@ def trainOnData(args,trainFeed):
           , graph.get_tensor_by_name(probsTargetName+":0"))
 
     batch_size = 1024
-    dataset = tf.data.Dataset.from_tensor_slices(trainFeed).shuffle(20000).batch(batch_size).repeat()
+    dataset = tf.data.Dataset.from_tensor_slices(trainFeed).shuffle(10000).batch(batch_size).repeat()
     iter = dataset.make_one_shot_iterator()
     n_batches = trainFeed[0].shape[0] // batch_size    
     
@@ -207,7 +207,7 @@ def trainOnData(args,trainFeed):
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)       
     with tf.control_dependencies(update_ops):
         #optimizer = tf.train.GradientDescentOptimizer(args.lr).minimize(cost,name=optimizerName)
-        mopt = tf.train.MomentumOptimizer(0.00000001,0.01)
+        mopt = tf.train.MomentumOptimizer(args.lr,0.01)
         optimizer = mopt.minimize(cost,name=optimizerName)
 
         #optimizer = mopt.minimize(cost,name=optimizerName)
@@ -317,7 +317,7 @@ python alpha1.py debug
     subTrain = subParsers.add_parser('train',help='train -h')
     subTrain.add_argument('-model',default=modelPath,help="input & output Model dir")
     subTrain.add_argument('-datafile',default=datafile,help="input msgpack file")
-    subTrain.add_argument('-lr',type=float,default=0.00001,help="learning rate")
+    subTrain.add_argument('-lr',type=float,default=0.000001,help="learning rate")
     subTrain.add_argument('-epochs',type=int,default=100,help="num epochs")
     return parserMode
             

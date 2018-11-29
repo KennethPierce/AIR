@@ -108,8 +108,8 @@ postMsg boards = do
         where 
         (lhs,rhs) = splitAt 4000 boards
         postMsgChunk :: [Board] ->  IO [[Float]]
-        postMsgChunk boards = do
-            let msg_json = toJSON boards
+        postMsgChunk bs = do
+            let msg_json = toJSON bs
             p <- post "http://127.0.0.1" msg_json
             r <- asJSON p :: IO RespInt
             pure (r Control.Lens.^. responseBody)
@@ -421,8 +421,8 @@ selfPlaysIO numGames numRollouts bMoves= do
     let splay = selfPlays mctss numRollouts rs
     mctss' <- runHaxlId splay
     _ <- Haxl.Prelude.forM_ mctss' (\mcts -> putStrLn (showBoard (board mcts)))
-    let trainData@(bs,_,_) = msgPackTrainData mctss'
-    --_ <- Haxl.Prelude.forM_ bs (\b -> putStrLn (showBoard b))
+    let trainData@(_bs,_,_) = msgPackTrainData mctss'
+    --_ <- Haxl.Prelude.forM_ _bs (\b -> putStrLn (showBoard b))
 
     BL.writeFile "mctsTrainBII.mp" (MP.pack trainData)
     pure ()
