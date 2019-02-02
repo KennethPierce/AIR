@@ -9,7 +9,9 @@ class AI a where
 
     chooseMove :: a -> Int
 
-    scoreGame :: a -> a -> Double
+    scoreGame :: a      -- | winning game (endgame)
+              -> a      -- | player game (used in multiplayer games)
+              -> Double -- | game scored for that player
 
 class Game a where
     isGameOver :: a -> Bool
