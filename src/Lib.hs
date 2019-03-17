@@ -117,6 +117,8 @@ postMsg boards = do
 
 instance Haxl.Core.DataSource u TensorFlowReq where
 --  fetch :: State req -> Flags -> u -> [BlockedFetch req] -> PerformFetch
+    fetch = undefined
+{-
     fetch _ _flags _userEnv blockedFetches = Haxl.Core.SyncFetch $  do
         let 
             boards :: [Board]
@@ -128,7 +130,7 @@ instance Haxl.Core.DataSource u TensorFlowReq where
                 let results = [(V.fromList probs,score) | (score:probs) <- msg]
                 Haxl.Prelude.mapM_ (uncurry Haxl.Core.putSuccess) (Data.List.zip resultVarInferences results)
         Control.Monad.unless (Data.List.null resultVarInferences) batchGetInference
-
+-}
 
 
 
@@ -213,9 +215,9 @@ getMoveProbabilities :: Board -> Square -> Moves -> HaxlId (V.Vector (Float,Loc)
 getMoveProbabilities b sq m = do 
     (probs,_score) <- getInference b'
     --let probs = vectOne
-    let !validMoves = V.backpermute  probs vm
+    let validMoves = V.backpermute  probs vm
     let sumVal = V.sum validMoves
-    let !z = V.zipWith (\a1 b1 -> (a1/sumVal,b1)) validMoves vm
+    let z = V.zipWith (\a1 b1 -> (a1/sumVal,b1)) validMoves vm
     pure z 
     where 
         --Alway send board as if player Black moves next.

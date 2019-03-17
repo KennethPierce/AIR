@@ -7,7 +7,10 @@ class AI a where
 
     trainGame :: a -> BL.ByteString
 
-    chooseMove :: a -> Int
+    chooseMove  :: Monad m
+                => m a      -- | GameState
+                -> Double   -- | Random 
+                -> m Int      -- | Move Chosen
 
     scoreGame :: a      -- | winning game (endgame)
               -> a      -- | player game (used in multiplayer games)

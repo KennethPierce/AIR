@@ -1,13 +1,20 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-cse #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE TypeFamilies              #-}
 
 module Main where
 
 
 import Lib
 import qualified System.Console.CmdArgs as Args
+import qualified Mcts 
+import qualified InRow
+import qualified Diagrams.Prelude as Diag
+import qualified Diagrams.Backend.SVG.CmdLine as Diag
 
-data MctsGames = MctsGames 
+data MctsGames =  MctsGames 
     { gamesToPlay :: Int
     , rollouts :: Int
     , beginMoves :: Int
@@ -23,11 +30,13 @@ mctsGames = MctsGames
     }
 
 main :: IO () 
-main = do 
-    (MctsGames gcnt rcnt bMoves tp) <- Args.cmdArgs mctsGames
-    if tp 
-    then
-        inferPost
-    else
-        selfPlaysIO gcnt rcnt bMoves
+main = Diag.mainWith (Diag.square 1 :: Diag.Diagram Diag.B)
 
+
+main1 :: IO () 
+main1 = do 
+    ca  <- Args.cmdArgs mctsGames
+    doMain ca
+    where
+        doMain (MctsGames gcnt rcnt bMoves True) = inferPost
+        doMain (MctsGames gcnt rcnt bMoves _) = selfPlaysIO gcnt rcnt bMoves

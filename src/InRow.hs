@@ -1,9 +1,10 @@
 module InRow where
 import qualified Data.Set as Set
 import qualified Data.Vector.Unboxed as V
-import qualified Data.ByteString.Lazy as BL
+--import qualified Data.ByteString.Lazy as BL
 import qualified Data.List as List
 import qualified Types as AirTypes
+import System.Random
 
 boardSize :: Int
 boardSize = 7
@@ -27,7 +28,20 @@ data Square
 instance AirTypes.AI InRow where
     scoreGame (MkInRow _ _ _ SQEmpty _ _ _) _ = 0.0
     scoreGame (MkInRow _ _ _ winw _ _ _) (MkInRow _ _ playerp _ _ _ _) = if winw == playerp then 1.0 else -1.0
+    chooseMove mInRow r = do
+        (MkInRow _ _ _ _ _ m c) <- mInRow
+        let   zs = zip (Set.toList m) (fmap (/sumScore) ss)
+              ss = fmap (exp.scoreGameSimple) c
+              sumScore = sum ss
+              chooseIdx :: [(Int,Double)] -> Double -> Int
+              chooseIdx [] _ = undefined -- error
+              chooseIdx ((idx,_):[]) _ = idx
+              chooseIdx ((idx,sc):xs) rand = if rand-sc < 0 then idx else chooseIdx xs (rand-sc)
+        pure (chooseIdx zs r)
 
+
+    inferGame = undefined
+    trainGame = undefined
 
 instance AirTypes.Game InRow where
     isGameOver (MkInRow _ _ _ w _ _ c) = w /= SQEmpty || null c
@@ -57,25 +71,27 @@ data InRow = MkInRow
 scoreGameSimple  :: InRow -> Double
 scoreGameSimple (MkInRow _ (wsb,wsw) pg _ _ _ _) = if pg == SQBlack then scoreWinState wsb wsw else scoreWinState wsw wsb
     where
-        scoreWinState pl opp = score pl opp pos - score opp pl neg
+        scoreWinState pl opp = rawScore / 5
+           where rawScore = score pl opp pos - score opp pl neg
         pos = [0,1,4,9,16,125]
         neg = [0,1,4,9,75.150]
         score (p1,p2,p3,p4) (o1,o2,o3,o4) points = sc p1 o1 + sc p2 o2 + sc p3 o3 + sc p4 o4
             where 
                 sc p o = V.foldl calc 0.0 (V.zip p o)
                 calc s (pl,opp) = s + (if opp == 0 then (points !! pl) else 0.0) 
-
-
+{-}
 autoPlay :: InRow -> IO ()
-autoPlay inrow@(MkInRow _ _ _ _ _ _ []) = putStr $ inRowToString inrow 
-autoPlay inrow@(MkInRow _ _ _ SQEmpty _ _ _) = do 
-    putStr $ inRowToString inrow    
-    autoPlay (snd (List.maximumBy (\(a,_) (b,_) -> compare a b  ) zw))
-        where 
-            c = children inrow
-            zw = fmap (\ir -> (scoreGameSimple ir,ir)) c
-autoPlay inrow = putStr $ inRowToString inrow             
-
+autoPlay inrowS = do
+    g <- newStdGen
+    autoPlay' inrowS (randomRs (0,1) g)
+    where 
+        autoPlay' :: InRow -> [Double] -> IO ()
+        autoPlay' inrow@(MkInRow _ _ _ _ _ _ []) _ = putStr $ inRowToString inrow 
+        autoPlay' inrow@(MkInRow _ _ _ SQEmpty _ _ _) (r:rs) = do 
+            putStr $ inRowToString inrow    
+            autoPlay' (AirTypes.makeMove inrow (AirTypes.chooseMove inrow r)) rs
+        autoPlay' inrow _ = putStr $ inRowToString inrow             
+-}
 boardIndex :: Board -> Int -> Square
 boardIndex (bb,bw) i = toSquare (bb V.! i) (bw V.! i)
     where 
@@ -119,7 +135,7 @@ printGame :: [Int] -> InRow -> IO ()
 printGame [] ir = putStr $ inRowToString ir
 printGame (x:xs) ir = do
     putStr $ inRowToString ir
-    printGame xs ((children ir) !! x)
+    printGame xs (AirTypes.makeMove ir x)
 
 
 winStateUpdate :: [ ([Int],[Int],[Int],[Int])]
@@ -180,8 +196,8 @@ initInRowRec inRow@(MkInRow b ws p w h m _) = MkInRow b ws p w h m cs
                 pure (initInRowRec inRow')
 
 
-initializeInRow :: InRow 
-initializeInRow = initInRowRec inRow
+initializeInRow :: Square -> InRow 
+initializeInRow pl = initInRowRec inRow
     where    
         inRow = MkInRow b ws p w h m c
         b = (falseV,falseV) 
@@ -195,7 +211,7 @@ initializeInRow = initInRowRec inRow
                 numWins = boardSize-winLength+1
 
         --
-        p = SQBlack
+        p = pl
         w = SQEmpty
         h = []
         m = Set.fromList [0..(boardSizeSq-1)]
