@@ -28,6 +28,7 @@ data Square
 instance AirTypes.AI InRow where
     scoreGame (MkInRow _ _ _ SQEmpty _ _ _) _ = 0.0
     scoreGame (MkInRow _ _ _ winw _ _ _) (MkInRow _ _ playerp _ _ _ _) = if winw == playerp then 1.0 else -1.0
+{-
     chooseMove mInRow r = do
         (MkInRow _ _ _ _ _ m c) <- mInRow
         let   zs = zip (Set.toList m) (fmap (/sumScore) ss)
@@ -38,14 +39,14 @@ instance AirTypes.AI InRow where
               chooseIdx ((idx,_):[]) _ = idx
               chooseIdx ((idx,sc):xs) rand = if rand-sc < 0 then idx else chooseIdx xs (rand-sc)
         pure (chooseIdx zs r)
-
+-}
 
     inferGame = undefined
     trainGame = undefined
 
 instance AirTypes.Game InRow where
     isGameOver (MkInRow _ _ _ w _ _ c) = w /= SQEmpty || null c
-    validMoves (MkInRow _ _ _ _ _ m _) = Set.toList m
+    --validMoves (MkInRow _ _ _ _ _ m _) = Set.toList m
     makeMove inrow move = (children inrow) !! (Set.findIndex move (moves inrow))
 
 

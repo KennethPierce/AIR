@@ -24,7 +24,7 @@ import qualified Control.Exception
 import qualified Debug.Trace
 import qualified Data.MessagePack as MP
 import qualified Data.ByteString.Lazy as BL
-import qualified Control.Monad
+--import qualified Control.Monad
 import qualified Data.List
 import qualified Data.Hashable -- for haxl
 import qualified Data.Typeable -- for haxl
@@ -152,9 +152,9 @@ boardSetL b (x,y) s = b `boardSet` [(i,s)]
 boardIndex :: Board -> Int -> Square
 boardIndex (bb,bw) i = toSquare (bb V.! i) (bw V.! i)
     where 
+        toSquare True True = Control.Exception.assert False  SQEmpty
         toSquare True _ = SQBlack
         toSquare _ True = SQWhite
-        toSquare True True = Control.Exception.assert False  SQEmpty
         toSquare _ _ = SQEmpty
 
 boardSet :: Board -> [(Int,Square)] -> Board
@@ -230,6 +230,7 @@ getMoveProbabilities b sq m = do
 
 --selectMoveRandomly [] _ = Left "error: no move selected. rand > 1 or move probs don't add to 1"
 selectMoveRandomly :: [(Float,Loc)] -> Float -> Int -> (Loc,Int)
+selectMoveRandomly [] _ _ = undefined
 selectMoveRandomly ((_,l):[]) _ idx = (l,idx)
 selectMoveRandomly ((f,l):mps) rand idx = 
     if rand <= f
@@ -284,6 +285,7 @@ initialMctsMoves b p m w h = MkMcts b p m 0 0 w [initialMctsMoves b' p' m' w' (h
 autoPlayRollout :: Mcts -> RandFloats -> HaxlId Square
 autoPlayRollout (MkMcts _ _ _ _ _ SQBlack _ _) _ = pure SQBlack
 autoPlayRollout (MkMcts _ _ _ _ _ SQWhite _ _) _ = pure SQWhite
+autoPlayRollout _ [] = undefined
 autoPlayRollout mcts@(MkMcts b p m _ _ w _ _) (r:rs) = do 
     mps <- getMoveProbabilities b p m
     let (l,_idx) = selectMoveRandomly (V.toList mps) r 0 
@@ -380,6 +382,7 @@ mctsUpdates :: Mcts -> Int -> RandInts ->  HaxlId Mcts
 mctsUpdates mcts 0 _ =  Debug.Trace.trace tracemsg (pure mcts)
     where 
         tracemsg = " moveCnt="++show (length (moves mcts))
+mctsUpdates _ _ []  = undefined
 mctsUpdates mcts cnt (i:is) = do
     (mcts',rcnt) <-  manyMctsUpdate mcts cnt rs
     mctsUpdates mcts' (cnt-rcnt) is

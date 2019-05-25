@@ -57,7 +57,9 @@ executables:
 
     dependencies:
     - mctsGames
+    - vector
     - text
+    - random
     - cmdargs
     - diagrams-lib
     - diagrams-svg
@@ -74,3 +76,6 @@ tests:
 
     dependencies:
     - mctsGames
+    - hspec
+    - vector
+    - QuickCheck
