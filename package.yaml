@@ -37,8 +37,6 @@ library:
   - mtl
   - data-msgpack
   - bytestring
-  - diagrams-lib
-  - diagrams-svg
   - wreq
   - lens
   - aeson
@@ -61,8 +59,6 @@ executables:
     - text
     - random
     - cmdargs
-    - diagrams-lib
-    - diagrams-svg
 
 tests:
   mctsGames-test:
