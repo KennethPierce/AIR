@@ -54,7 +54,7 @@ instance AirTypes.Game InRow where
 
 
 type Board = (V.Vector Bool,V.Vector Bool)
-type WinState = (V.Vector Int,V.Vector Int,V.Vector Int,V.Vector Int) -- | horizontal virtical left-diagonal right-diagonal
+type WinState = (V.Vector Int,V.Vector Int,V.Vector Int,V.Vector Int) -- ^ horizontal virtical left-diagonal right-diagonal
 type WinStates = (WinState,WinState) 
 type History = [Int]
 type Moves = Set.Set Int

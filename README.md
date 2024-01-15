@@ -22,3 +22,6 @@ gv *.ps
 *.exe +RTS -l
 threadscope.linux *.eventlog
 
+###doc test
+stack install doctest
+

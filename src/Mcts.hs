@@ -17,9 +17,9 @@ data Mcts a = MkMcts
     }
 
 type ChooseMove m a =  Monad m
-    => m a      -- | GameState
-    -> Double   -- | Random 
-    -> m Int      -- | Move Chosen
+    => m a      -- ^ GameState
+    -> Double   -- ^ Random 
+    -> m Int      -- ^ Move Chosen
 
 emptyMcts :: a ->  Mcts a 
 emptyMcts g = MkMcts 0 0 g IntMap.empty

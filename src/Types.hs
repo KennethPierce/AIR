@@ -6,8 +6,8 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Vector as V
 
 type MoveWeights m a =  Monad m
-    => a              -- | GameState
-    -> m (V.Vector Double)     -- | Move weights
+    => a              -- ^ GameState
+    -> m (V.Vector Double)     -- ^ Move weights
 
 
 class AI a where
@@ -17,9 +17,9 @@ class AI a where
 
     moveWeights  :: MoveWeights m a
 
-    scoreGame :: a      -- | winning game (endgame)
-              -> a      -- | player game (used in multiplayer games)
-              -> Double -- | game scored for that player
+    scoreGame :: a      -- ^ winning game (endgame)
+              -> a      -- ^ player game (used in multiplayer games)
+              -> Double -- ^ game scored for that player
 
 class Game a where
     isGameOver :: a -> Bool

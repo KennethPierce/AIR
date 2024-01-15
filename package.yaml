@@ -40,6 +40,7 @@ library:
   - wreq
   - lens
   - aeson
+  - random-shuffle
 
 executables:
   mctsGames-exe:
